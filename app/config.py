@@ -113,6 +113,9 @@ class Settings:
     tdx_cities: tuple[str, ...]
     tdx_request_timeout: int
     tdx_token_refresh_skew: int
+    tdx_retry_attempts: int
+    tdx_retry_backoff: float
+    tdx_min_request_interval: float
     realtime_cache_ttl: int
 
     @classmethod
@@ -130,6 +133,9 @@ class Settings:
             tdx_cities=_split_csv(os.getenv("TDX_CITIES"), DEFAULT_TDX_CITIES),
             tdx_request_timeout=int(os.getenv("TDX_REQUEST_TIMEOUT", "30")),
             tdx_token_refresh_skew=int(os.getenv("TDX_TOKEN_REFRESH_SKEW", "300")),
+            tdx_retry_attempts=int(os.getenv("TDX_RETRY_ATTEMPTS", "6")),
+            tdx_retry_backoff=float(os.getenv("TDX_RETRY_BACKOFF", "2.0")),
+            tdx_min_request_interval=float(os.getenv("TDX_MIN_REQUEST_INTERVAL", "0.5")),
             realtime_cache_ttl=int(os.getenv("REALTIME_CACHE_TTL", "15")),
         )
 

@@ -34,6 +34,15 @@ Optional:
 - `TDX_TOKEN_REFRESH_SKEW`
   - Refresh token this many seconds before expiration.
   - Default: `300`
+- `TDX_RETRY_ATTEMPTS`
+  - Max retry attempts for `429` and `5xx` responses.
+  - Default: `6`
+- `TDX_RETRY_BACKOFF`
+  - Base backoff in seconds for rate-limit/server retries.
+  - Default: `2.0`
+- `TDX_MIN_REQUEST_INTERVAL`
+  - Minimum delay between TDX requests in seconds.
+  - Default: `0.5`
 
 ## Install
 
