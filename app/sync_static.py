@@ -112,6 +112,35 @@ def _replace_main_route(connection, route: StaticRoute) -> None:
             (route.routeid, path.pathid, path.name, path.name_en),
         )
 
+        for stop in sorted(path.stops, key=lambda item: item.seq):
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO stops
+                (routeid, pathid, seq, stopid, name, name_en, lat, lon)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    route.routeid,
+                    path.pathid,
+                    stop.seq,
+                    stop.stopid,
+                    stop.name,
+                    stop.name_en,
+                    stop.lat,
+                    stop.lon,
+                ),
+            )
+
+        for seq, (lat, lon) in enumerate(path.points, start=1):
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO path_points
+                (routeid, pathid, seq, lat, lon)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (route.routeid, path.pathid, seq, lat, lon),
+            )
+
 
 def _replace_city_route(connection, route: StaticRoute) -> None:
     connection.execute("DELETE FROM stops WHERE routeid = ?", (route.routeid,))

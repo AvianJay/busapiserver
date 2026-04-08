@@ -23,7 +23,7 @@ Optional:
   - Default: all supported `CityBus` cities/counties in Taiwan
   - Example: `Taipei,NewTaipei,Taoyuan`
 - `BUS_DB_PATH`
-  - Primary SQLite database path.
+  - Primary SQLite database path. This remains the full database with `routes`, `paths`, `stops`, and `path_points`.
   - Default: `./bus.db`
 - `BUS_DOWNLOAD_DB_PATH`
   - Downloadable SQLite database path with only `routes` and `paths`.
@@ -65,8 +65,11 @@ python -m app.sync_static
 
 By default this syncs all supported `CityBus` cities/counties. If you only want a subset, set `TDX_CITIES` or pass `--cities`.
 
-After static sync finishes, the server also builds a downloadable `bus.db` with only `routes` and `paths`. That smaller file is what `GET /downloads/bus.db` serves.
-It also builds one city database per synced city at `./downloads/{City}.db`, and those files contain `stops` and `path_points`.
+After static sync finishes:
+
+- the primary `./bus.db` remains the full database
+- `./downloads/bus.db` contains only `routes` and `paths`
+- `./downloads/{City}.db` contains that city's `stops` and `path_points`
 
 Optional: override the cities for one run:
 
@@ -119,6 +122,7 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/paths/0/points
 - TDX authentication uses `client_credentials`.
 - Access tokens are cached in memory and reused until near expiration.
 - Static sync replaces old route data atomically per route.
-- `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`.
+- the primary `bus.db` remains the full internal database
+- `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`
 - `downloads/{City}.db` stores `stops` and `path_points` for that city.
 - Realtime snapshots are cached in memory inside the server process.
