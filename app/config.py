@@ -11,6 +11,30 @@ DEFAULT_TDX_TOKEN_URL = (
     "https://tdx.transportdata.tw/auth/realms/TDXConnect/"
     "protocol/openid-connect/token"
 )
+DEFAULT_TDX_CITIES = (
+    "Taipei",
+    "NewTaipei",
+    "Taoyuan",
+    "Taichung",
+    "Tainan",
+    "Kaohsiung",
+    "Keelung",
+    "Hsinchu",
+    "HsinchuCounty",
+    "MiaoliCounty",
+    "ChanghuaCounty",
+    "NantouCounty",
+    "YunlinCounty",
+    "Chiayi",
+    "ChiayiCounty",
+    "PingtungCounty",
+    "YilanCounty",
+    "HualienCounty",
+    "TaitungCounty",
+    "PenghuCounty",
+    "KinmenCounty",
+    "LienchiangCounty",
+)
 
 CITY_PREFIX_TO_NAME = {
     "CHA": "ChanghuaCounty",
@@ -103,7 +127,7 @@ class Settings:
             tdx_client_secret=os.getenv("TDX_CLIENT_SECRET"),
             tdx_base_url=os.getenv("TDX_BASE_URL", DEFAULT_TDX_BASE_URL).rstrip("/"),
             tdx_token_url=os.getenv("TDX_TOKEN_URL", DEFAULT_TDX_TOKEN_URL),
-            tdx_cities=_split_csv(os.getenv("TDX_CITIES"), ("Taipei",)),
+            tdx_cities=_split_csv(os.getenv("TDX_CITIES"), DEFAULT_TDX_CITIES),
             tdx_request_timeout=int(os.getenv("TDX_REQUEST_TIMEOUT", "30")),
             tdx_token_refresh_skew=int(os.getenv("TDX_TOKEN_REFRESH_SKEW", "300")),
             realtime_cache_ttl=int(os.getenv("REALTIME_CACHE_TTL", "15")),

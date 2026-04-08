@@ -20,7 +20,7 @@ Optional:
 
 - `TDX_CITIES`
   - Comma-separated city list to sync from TDX.
-  - Default: `Taipei`
+  - Default: all supported `CityBus` cities/counties in Taiwan
   - Example: `Taipei,NewTaipei,Taoyuan`
 - `BUS_DB_PATH`
   - SQLite database path.
@@ -50,6 +50,8 @@ Initialize the database and sync static route/path/stop/shape data:
 ```bash
 python -m app.sync_static
 ```
+
+By default this syncs all supported `CityBus` cities/counties. If you only want a subset, set `TDX_CITIES` or pass `--cities`.
 
 Optional: override the cities for one run:
 

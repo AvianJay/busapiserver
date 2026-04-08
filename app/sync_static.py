@@ -255,7 +255,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sync static bus data from TDX.")
     parser.add_argument(
         "--cities",
-        help="Comma-separated TDX city names. Defaults to TDX_CITIES or Taipei.",
+        help="Comma-separated TDX city names. Defaults to TDX_CITIES or all supported CityBus cities/counties.",
     )
     args = parser.parse_args()
 
