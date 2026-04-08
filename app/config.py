@@ -38,6 +38,31 @@ CITY_PREFIX_TO_NAME = {
 }
 
 
+def load_dotenv(dotenv_path: str | Path) -> None:
+    path = Path(dotenv_path)
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in os.environ:
+            continue
+
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
 def _split_csv(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
     if not value:
         return default
@@ -69,6 +94,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         project_dir = Path(__file__).resolve().parent.parent
+        load_dotenv(project_dir / ".env")
         db_path = Path(os.getenv("BUS_DB_PATH", project_dir / "bus.db")).resolve()
         return cls(
             project_dir=project_dir,

@@ -9,6 +9,13 @@ Required:
 - `TDX_CLIENT_ID`
 - `TDX_CLIENT_SECRET`
 
+You can set them in the shell, or place them in a local `.env` file in the project root:
+
+```env
+TDX_CLIENT_ID=your_client_id
+TDX_CLIENT_SECRET=your_client_secret
+```
+
 Optional:
 
 - `TDX_CITIES`
