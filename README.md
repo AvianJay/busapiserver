@@ -26,7 +26,7 @@ Optional:
   - Primary SQLite database path.
   - Default: `./bus.db`
 - `BUS_DOWNLOAD_DB_PATH`
-  - Downloadable SQLite database path without `path_points`.
+  - Downloadable SQLite database path with only `routes` and `paths`.
   - Default: `./downloads/bus.db`
 - `REALTIME_CACHE_TTL`
   - In-memory realtime cache TTL in seconds.
@@ -65,7 +65,8 @@ python -m app.sync_static
 
 By default this syncs all supported `CityBus` cities/counties. If you only want a subset, set `TDX_CITIES` or pass `--cities`.
 
-After static sync finishes, the server also builds a second downloadable database without the `path_points` table. That smaller file is what `GET /downloads/bus.db` serves.
+After static sync finishes, the server also builds a downloadable `bus.db` with only `routes` and `paths`. That smaller file is what `GET /downloads/bus.db` serves.
+It also builds one city database per synced city at `./downloads/{City}.db`, and those files contain `stops` and `path_points`.
 
 Optional: override the cities for one run:
 
@@ -91,12 +92,19 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 - `GET /downloads/bus.db`
 - `GET /api/v1/routes/{routeid}/realtime`
+- `GET /api/v1/routes/{routeid}/stops`
 - `GET /api/v1/routes/{routeid}/paths/{pathid}/points`
 
 Example:
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime
+```
+
+Stops example:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/routes/TPE307/stops
 ```
 
 Path shape example:
@@ -111,5 +119,6 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/paths/0/points
 - TDX authentication uses `client_credentials`.
 - Access tokens are cached in memory and reused until near expiration.
 - Static sync replaces old route data atomically per route.
-- `GET /downloads/bus.db` serves the stripped database without `path_points`.
+- `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`.
+- `downloads/{City}.db` stores `stops` and `path_points` for that city.
 - Realtime snapshots are cached in memory inside the server process.

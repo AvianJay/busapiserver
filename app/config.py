@@ -60,6 +60,7 @@ CITY_PREFIX_TO_NAME = {
     "TXG": "Taichung",
     "YUN": "YunlinCounty",
 }
+CITY_NAME_TO_PREFIX = {city: prefix for prefix, city in CITY_PREFIX_TO_NAME.items()}
 
 
 def load_dotenv(dotenv_path: str | Path) -> None:
@@ -119,6 +120,9 @@ class Settings:
     tdx_min_request_interval: float
     realtime_cache_ttl: int
 
+    def city_db_path(self, city: str) -> Path:
+        return self.download_db_path.parent / f"{city}.db"
+
     @classmethod
     def from_env(cls) -> "Settings":
         project_dir = Path(__file__).resolve().parent.parent
@@ -158,6 +162,10 @@ def guess_city_from_routeid(routeid: str, allowed_cities: tuple[str, ...]) -> st
     if city and city in allowed_cities:
         return city
     return None
+
+
+def routeid_to_city(routeid: str) -> str | None:
+    return CITY_PREFIX_TO_NAME.get(routeid[:3].upper())
 
 
 @lru_cache(maxsize=1)

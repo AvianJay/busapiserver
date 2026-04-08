@@ -3,9 +3,17 @@ from __future__ import annotations
 import argparse
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from app.config import Settings, get_settings
-from app.db import export_download_db, get_connection, init_db
+from app.config import CITY_NAME_TO_PREFIX, Settings, get_settings
+from app.db import (
+    clear_city_db,
+    delete_main_routes_by_prefix,
+    export_download_db,
+    get_connection,
+    init_city_db,
+    init_db,
+)
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient
 
@@ -85,54 +93,63 @@ def _parse_geometry(geometry: str | None) -> list[tuple[float, float]]:
     return points
 
 
-def _replace_route(connection, route: StaticRoute) -> None:
-    with connection:
+def _replace_main_route(connection, route: StaticRoute) -> None:
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO routes (routeid, name, name_en)
+        VALUES (?, ?, ?)
+        """,
+        (route.routeid, route.name, route.name_en),
+    )
+    connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
+
+    for path in sorted(route.paths.values(), key=lambda item: item.pathid):
         connection.execute(
             """
-            INSERT OR REPLACE INTO routes (routeid, name, name_en)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO paths (routeid, pathid, name, name_en)
+            VALUES (?, ?, ?, ?)
             """,
-            (route.routeid, route.name, route.name_en),
+            (route.routeid, path.pathid, path.name, path.name_en),
         )
-        connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
 
-        for path in sorted(route.paths.values(), key=lambda item: item.pathid):
+
+def _replace_city_route(connection, route: StaticRoute) -> None:
+    connection.execute("DELETE FROM stops WHERE routeid = ?", (route.routeid,))
+    connection.execute("DELETE FROM path_points WHERE routeid = ?", (route.routeid,))
+
+    for path in sorted(route.paths.values(), key=lambda item: item.pathid):
+        for stop in sorted(path.stops, key=lambda item: item.seq):
             connection.execute(
                 """
-                INSERT OR REPLACE INTO paths (routeid, pathid, name, name_en)
-                VALUES (?, ?, ?, ?)
+                INSERT OR REPLACE INTO stops
+                (routeid, pathid, seq, stopid, name, name_en, lat, lon)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (route.routeid, path.pathid, path.name, path.name_en),
+                (
+                    route.routeid,
+                    path.pathid,
+                    stop.seq,
+                    stop.stopid,
+                    stop.name,
+                    stop.name_en,
+                    stop.lat,
+                    stop.lon,
+                ),
             )
 
-            for stop in sorted(path.stops, key=lambda item: item.seq):
-                connection.execute(
-                    """
-                    INSERT OR REPLACE INTO stops
-                    (routeid, pathid, seq, stopid, name, name_en, lat, lon)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        route.routeid,
-                        path.pathid,
-                        stop.seq,
-                        stop.stopid,
-                        stop.name,
-                        stop.name_en,
-                        stop.lat,
-                        stop.lon,
-                    ),
-                )
+        for seq, (lat, lon) in enumerate(path.points, start=1):
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO path_points
+                (routeid, pathid, seq, lat, lon)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (route.routeid, path.pathid, seq, lat, lon),
+            )
 
-            for seq, (lat, lon) in enumerate(path.points, start=1):
-                connection.execute(
-                    """
-                    INSERT OR REPLACE INTO path_points
-                    (routeid, pathid, seq, lat, lon)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (route.routeid, path.pathid, seq, lat, lon),
-                )
+
+def _city_temp_db_path(city_db_path: Path) -> Path:
+    return city_db_path.with_suffix(f"{city_db_path.suffix}.tmp")
 
 
 def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> None:
@@ -239,12 +256,30 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                     if not path.points:
                         path.points = _parse_geometry(item.get("Geometry"))
 
-                for route in static_routes.values():
-                    _replace_route(connection, route)
+                prefix = CITY_NAME_TO_PREFIX.get(city)
+                if prefix:
+                    with connection:
+                        delete_main_routes_by_prefix(connection, prefix)
+                        for route in static_routes.values():
+                            _replace_main_route(connection, route)
+
+                city_db_path = settings.city_db_path(city)
+                temp_city_db_path = _city_temp_db_path(city_db_path)
+                if temp_city_db_path.exists():
+                    temp_city_db_path.unlink()
+                init_city_db(temp_city_db_path)
+                with get_connection(temp_city_db_path) as city_connection:
+                    with city_connection:
+                        clear_city_db(city_connection)
+                        for route in static_routes.values():
+                            _replace_city_route(city_connection, route)
+                city_db_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_city_db_path.replace(city_db_path)
 
                 print(
                     f"[sync_static] city={city} routes={len(static_routes)} "
-                    f"stop_of_route={len(stop_of_route_items)} shapes={len(shapes)}"
+                    f"stop_of_route={len(stop_of_route_items)} shapes={len(shapes)} "
+                    f"city_db={city_db_path.name}"
                 )
 
         export_download_db(settings.db_path, settings.download_db_path)

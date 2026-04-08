@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from app.config import Settings, get_settings, guess_city_from_routeid
-from app.db import get_connection, init_db, load_route_static
+from app.config import Settings, get_settings, routeid_to_city
+from app.db import get_connection, init_db, load_route_metadata, load_route_stops
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient
 
@@ -65,6 +65,39 @@ def _build_message(item: dict[str, Any]) -> str:
     return ""
 
 
+def _load_static_route(settings: Settings, routeid: str) -> dict | None:
+    with get_connection(settings.db_path) as main_connection:
+        route_meta = load_route_metadata(main_connection, routeid)
+    if route_meta is None:
+        return None
+
+    city = routeid_to_city(routeid)
+    stops_by_path: dict[int, dict] = {}
+    if city is not None:
+        city_db_path = settings.city_db_path(city)
+        if city_db_path.exists():
+            with get_connection(city_db_path) as city_connection:
+                stops_by_path = load_route_stops(city_connection, routeid)
+
+    paths = {}
+    for pathid, path_meta in route_meta["paths"].items():
+        stop_info = stops_by_path.get(pathid, {"stops": [], "stop_index": {}})
+        paths[pathid] = {
+            "pathid": pathid,
+            "name": path_meta["name"],
+            "name_en": path_meta["name_en"],
+            "stops": stop_info["stops"],
+            "stop_index": stop_info["stop_index"],
+        }
+
+    return {
+        "routeid": route_meta["routeid"],
+        "name": route_meta["name"],
+        "name_en": route_meta["name_en"],
+        "paths": paths,
+    }
+
+
 class RealtimeService:
     def __init__(self, settings: Settings, client: TDXClient) -> None:
         self.settings = settings
@@ -90,14 +123,13 @@ class RealtimeService:
         return snapshot
 
     def fetch_snapshot(self, routeid: str) -> dict[str, Any]:
-        with get_connection(self.settings.db_path) as connection:
-            static_route = load_route_static(connection, routeid)
+        static_route = _load_static_route(self.settings, routeid)
         if static_route is None:
             raise RouteNotFoundError(routeid)
 
         candidate_cities = []
-        guessed_city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
-        if guessed_city:
+        guessed_city = routeid_to_city(routeid)
+        if guessed_city and guessed_city in self.settings.tdx_cities:
             candidate_cities.append(guessed_city)
         for city in self.settings.tdx_cities:
             if city not in candidate_cities:
