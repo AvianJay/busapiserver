@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import MutableMapping
+import threading
+import time
+
 import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -9,6 +14,46 @@ from app.sync_realtime import RouteNotFoundError
 
 
 router = APIRouter()
+
+RATE_LIMIT_REQUESTS = 30
+RATE_LIMIT_WINDOW_SECONDS = 60
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
+
+
+def _get_client_ip(request: Request) -> str:
+    # Trust Cloudflare's connecting IP first.
+    cf_ip = (request.headers.get("CF-Connecting-IP") or "").strip()
+    if cf_ip:
+        return cf_ip
+    return (request.client.host if request.client else "unknown").strip() or "unknown"
+
+
+def _check_route_rate_limit(request: Request) -> None:
+    route = request.scope.get("route")
+    route_template = getattr(route, "path", request.url.path)
+    if not isinstance(route_template, str) or not route_template.startswith("/api/v1/routes/"):
+        return
+
+    ip = _get_client_ip(request)
+    now = time.monotonic()
+    window_start = now - RATE_LIMIT_WINDOW_SECONDS
+    key = (ip, route_template)
+
+    with _rate_limit_lock:
+        hits = _rate_limit_hits.setdefault(key, deque())
+        while hits and hits[0] < window_start:
+            hits.popleft()
+
+        if len(hits) >= RATE_LIMIT_REQUESTS:
+            retry_after = max(1, int(hits[0] + RATE_LIMIT_WINDOW_SECONDS - now))
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Limit is 30 requests per minute per endpoint.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        hits.append(now)
 
 
 def _encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> str:
@@ -44,6 +89,7 @@ def download_bus_db(request: Request) -> FileResponse:
 
 @router.get("/api/v1/routes/{routeid}/realtime")
 def get_route_realtime(routeid: str, request: Request) -> dict:
+    _check_route_rate_limit(request)
     service = request.app.state.realtime_service
     try:
         return service.get_snapshot(routeid)
@@ -57,6 +103,7 @@ def get_route_realtime(routeid: str, request: Request) -> dict:
 
 @router.get("/api/v1/routes/{routeid}/paths/{pathid}/points")
 def get_route_path_points(routeid: str, pathid: int, request: Request) -> dict:
+    _check_route_rate_limit(request)
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         if not path_exists(connection, routeid, pathid):
@@ -75,6 +122,7 @@ def get_route_path_points(routeid: str, pathid: int, request: Request) -> dict:
 
 @router.get("/api/v1/routes/{routeid}/stops")
 def get_route_stops(routeid: str, request: Request) -> dict:
+    _check_route_rate_limit(request)
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         static_route = load_route_static(connection, routeid)
