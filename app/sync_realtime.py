@@ -22,6 +22,17 @@ STOP_STATUS_MESSAGES = {
     4: "\u4eca\u65e5\u672a\u71df\u904b",
 }
 
+ARRIVING_VEHICLE_STOP_STATUS = 1
+
+
+@dataclass
+class PlateObservation:
+    plate: str
+    pathid: int
+    stopid: str
+    eta: int | None
+    is_arriving: bool
+
 
 class RouteNotFoundError(KeyError):
     """Raised when a route is missing from the local database."""
@@ -63,6 +74,55 @@ def _build_message(item: dict[str, Any]) -> str:
         return scheduled_time
 
     return ""
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: str) -> list[PlateObservation]:
+    observations: list[PlateObservation] = []
+    stop_status = _to_int_or_none(item.get("StopStatus"))
+
+    # StopStatus=1 means "not yet departed" in N1; avoid pinning these buses on first stop.
+    allow_non_arriving_plate = stop_status not in {1, 2, 3, 4}
+
+    top_plate = (item.get("PlateNumb") or "").strip()
+    top_is_arriving = item.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
+    if top_plate and top_plate != "-1" and (allow_non_arriving_plate or top_is_arriving):
+        observations.append(
+            PlateObservation(
+                plate=top_plate,
+                pathid=pathid,
+                stopid=stopid,
+                eta=_to_int_or_none(item.get("EstimateTime")),
+                is_arriving=top_is_arriving,
+            )
+        )
+
+    for estimate in item.get("Estimates") or []:
+        estimate_plate = (estimate.get("PlateNumb") or "").strip()
+        if not estimate_plate or estimate_plate == "-1":
+            continue
+        estimate_is_arriving = estimate.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
+        if not allow_non_arriving_plate and not estimate_is_arriving:
+            continue
+        observations.append(
+            PlateObservation(
+                plate=estimate_plate,
+                pathid=pathid,
+                stopid=stopid,
+                eta=_to_int_or_none(estimate.get("EstimateTime")),
+                is_arriving=estimate_is_arriving,
+            )
+        )
+
+    return observations
 
 
 class RealtimeService:
@@ -135,6 +195,7 @@ class RealtimeService:
 
         paths = static_route["paths"]
         grouped: dict[int, dict[str, dict[str, Any]]] = {}
+        plate_candidates: dict[tuple[int, str], list[PlateObservation]] = {}
 
         for item in items:
             pathid = int(item.get("Direction") or 0)
@@ -175,19 +236,29 @@ class RealtimeService:
             )
             stop_bucket["time"] = max(stop_bucket["time"], stop_time)
 
-            candidate_plates = []
-            plate = (item.get("PlateNumb") or "").strip()
-            if plate:
-                candidate_plates.append(plate)
-            for estimate in item.get("Estimates") or []:
-                estimate_plate = (estimate.get("PlateNumb") or "").strip()
-                if estimate_plate:
-                    candidate_plates.append(estimate_plate)
-            for candidate_plate in candidate_plates:
-                if candidate_plate == "-1":
-                    continue
-                if all(bus["id"] != candidate_plate for bus in stop_bucket["buses"]):
-                    stop_bucket["buses"].append({"id": candidate_plate, "type": "normal"})
+            for observation in _collect_plate_observations(item, pathid=pathid, stopid=stopid):
+                plate_candidates.setdefault((observation.pathid, observation.plate), []).append(observation)
+
+        for (pathid, plate), observations in plate_candidates.items():
+            arriving_observations = [item for item in observations if item.is_arriving]
+            effective_observations = arriving_observations or observations
+            path_meta = paths.get(pathid)
+            stop_index = (path_meta or {}).get("stop_index", {})
+
+            def _rank(observation: PlateObservation) -> tuple[int, int, str]:
+                eta_rank = observation.eta if observation.eta is not None else 10**9
+                seq_rank = stop_index.get(observation.stopid, {}).get("seq", 10**9)
+                return (eta_rank, seq_rank, observation.stopid)
+
+            selected = min(effective_observations, key=_rank)
+            path_bucket = grouped.get(pathid)
+            if not path_bucket:
+                continue
+            stop_bucket = path_bucket.get(selected.stopid)
+            if not stop_bucket:
+                continue
+            if all(bus["id"] != plate for bus in stop_bucket["buses"]):
+                stop_bucket["buses"].append({"id": plate, "type": "normal"})
 
         response_paths = []
         seen_pathids = set(paths)
