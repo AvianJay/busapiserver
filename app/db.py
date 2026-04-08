@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+
+SCHEMA_SQL = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS routes (
+    routeid     TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    name_en     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS paths (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    PRIMARY KEY (routeid, pathid),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS stops (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    stopid      TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS path_points (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
+CREATE INDEX IF NOT EXISTS idx_stops_routeid ON stops(routeid);
+CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
+CREATE INDEX IF NOT EXISTS idx_path_points_routeid ON path_points(routeid);
+"""
+
+
+def _configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON;")
+    connection.execute("PRAGMA journal_mode = WAL;")
+    return connection
+
+
+def connect(db_path: str | Path) -> sqlite3.Connection:
+    return _configure_connection(sqlite3.connect(Path(db_path)))
+
+
+@contextmanager
+def get_connection(db_path: str | Path) -> Iterator[sqlite3.Connection]:
+    connection = connect(db_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def init_db(db_path: str | Path) -> None:
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    with get_connection(db_path) as connection:
+        connection.executescript(SCHEMA_SQL)
+        connection.commit()
+
+
+def route_exists(connection: sqlite3.Connection, routeid: str) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM routes WHERE routeid = ? LIMIT 1",
+        (routeid,),
+    ).fetchone()
+    return row is not None
+
+
+def load_route_static(connection: sqlite3.Connection, routeid: str) -> dict | None:
+    route_row = connection.execute(
+        "SELECT routeid, name, name_en FROM routes WHERE routeid = ?",
+        (routeid,),
+    ).fetchone()
+    if route_row is None:
+        return None
+
+    path_rows = connection.execute(
+        """
+        SELECT pathid, name, name_en
+        FROM paths
+        WHERE routeid = ?
+        ORDER BY pathid
+        """,
+        (routeid,),
+    ).fetchall()
+
+    stop_rows = connection.execute(
+        """
+        SELECT pathid, seq, stopid, name, name_en, lat, lon
+        FROM stops
+        WHERE routeid = ?
+        ORDER BY pathid, seq
+        """,
+        (routeid,),
+    ).fetchall()
+
+    paths = {}
+    for row in path_rows:
+        paths[row["pathid"]] = {
+            "pathid": row["pathid"],
+            "name": row["name"],
+            "name_en": row["name_en"],
+            "stops": [],
+            "stop_index": {},
+        }
+
+    for row in stop_rows:
+        path = paths.setdefault(
+            row["pathid"],
+            {
+                "pathid": row["pathid"],
+                "name": f"Path {row['pathid']}",
+                "name_en": None,
+                "stops": [],
+                "stop_index": {},
+            },
+        )
+        stop_data = {
+            "seq": row["seq"],
+            "stopid": row["stopid"],
+            "name": row["name"],
+            "name_en": row["name_en"],
+            "lat": row["lat"],
+            "lon": row["lon"],
+        }
+        path["stops"].append(stop_data)
+        path["stop_index"][row["stopid"]] = stop_data
+
+    return {
+        "routeid": route_row["routeid"],
+        "name": route_row["name"],
+        "name_en": route_row["name_en"],
+        "paths": paths,
+    }
