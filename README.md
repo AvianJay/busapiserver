@@ -97,6 +97,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `GET /api/v1/routes/{routeid}/realtime`
 - `GET /api/v1/routes/{routeid}/stops`
 - `GET /api/v1/routes/{routeid}/paths/{pathid}/points`
+- `GET /api/v1/database/{name}/version`
 
 Example:
 
@@ -116,6 +117,12 @@ Path shape example:
 curl http://127.0.0.1:8000/api/v1/routes/TPE307/paths/0/points
 ```
 
+Database version example:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/database/main/version
+```
+
 ## Notes
 
 - All API timestamps are Unix timestamps in seconds.
@@ -125,6 +132,11 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/paths/0/points
 - Static sync metadata is persisted in `tdx_fetch_state` (resource key, last-modified, status, check/update times).
 - If all static resources (`Route`, `StopOfRoute`, `Shape`) return `304`, that city is skipped.
 - Static sync replaces old route data atomically per route.
+- The server does not run static sync at startup.
+- The server runs static sync automatically every Monday at 04:00 (local server time).
+- Database versions are tracked in `database_versions` with content hashes.
+- Version starts from `1` and only increments when tracked table data changes.
+- Supported database version names: `main`, `download`, and city names like `Taichung`.
 - the primary `bus.db` remains the full internal database
 - `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`
 - `downloads/{City}.db` stores `stops` and `path_points` for that city.

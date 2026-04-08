@@ -4,7 +4,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from app.db import get_connection, load_path_points, load_route_static, path_exists
+from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
 from app.sync_realtime import RouteNotFoundError
 
 
@@ -97,3 +97,13 @@ def get_route_stops(routeid: str, request: Request) -> dict:
         "name": static_route["name"],
         "paths": response_paths,
     }
+
+
+@router.get("/api/v1/database/{name}/version")
+def get_database_version(name: str, request: Request) -> dict:
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        version = load_database_version(connection, name)
+    if version is None:
+        raise HTTPException(status_code=404, detail=f"Database version for {name} was not found.")
+    return version

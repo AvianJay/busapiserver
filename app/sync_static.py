@@ -15,6 +15,7 @@ from app.db import (
     init_city_db,
     init_db,
     load_tdx_fetch_state,
+    refresh_database_versions,
     save_tdx_fetch_state,
 )
 from app.tdx_auth import TDXTokenManager
@@ -418,6 +419,11 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                 )
 
         export_download_db(settings.db_path, settings.download_db_path)
+        refresh_database_versions(
+            settings.db_path,
+            download_db_path=settings.download_db_path,
+            city_db_paths={city: settings.city_db_path(city) for city in effective_cities},
+        )
         print(f"[sync_static] built download db at {settings.download_db_path}")
     finally:
         client.close()

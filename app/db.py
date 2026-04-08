@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 
 MAIN_SCHEMA_SQL = """
@@ -61,6 +63,13 @@ CREATE TABLE IF NOT EXISTS tdx_fetch_state (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tdx_fetch_state_checked_at ON tdx_fetch_state(last_checked_at);
+
+CREATE TABLE IF NOT EXISTS database_versions (
+    name         TEXT PRIMARY KEY,
+    version      INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
 """
 
 DOWNLOAD_SCHEMA_SQL = """
@@ -334,3 +343,124 @@ def save_tdx_fetch_state(
         """,
         (resource_key, last_modified, last_status, last_checked_at, last_updated_at),
     )
+
+
+def _iter_table_rows_as_bytes(
+    connection: sqlite3.Connection,
+    table_name: str,
+) -> Iterable[bytes]:
+    columns_info = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+    column_names = [row["name"] for row in columns_info]
+    if not column_names:
+        return
+
+    columns_sql = ", ".join(f'"{name}"' for name in column_names)
+    order_sql = ", ".join(f'"{name}"' for name in column_names)
+    rows = connection.execute(
+        f'SELECT {columns_sql} FROM "{table_name}" ORDER BY {order_sql}'
+    )
+    for row in rows:
+        values = tuple(row[name] for name in column_names)
+        yield repr(values).encode("utf-8")
+
+
+def hash_tables(db_path: str | Path, table_names: tuple[str, ...]) -> str:
+    hasher = hashlib.sha256()
+    with get_connection(db_path) as connection:
+        for table_name in table_names:
+            hasher.update(f"table:{table_name}\n".encode("utf-8"))
+            for row_bytes in _iter_table_rows_as_bytes(connection, table_name):
+                hasher.update(row_bytes)
+                hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
+def _upsert_database_version(
+    connection: sqlite3.Connection,
+    name: str,
+    content_hash: str,
+    now: int,
+) -> dict[str, int | str | bool]:
+    row = connection.execute(
+        "SELECT name, version, content_hash, updated_at FROM database_versions WHERE name = ?",
+        (name,),
+    ).fetchone()
+
+    if row is None:
+        connection.execute(
+            """
+            INSERT INTO database_versions (name, version, content_hash, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, 1, content_hash, now),
+        )
+        return {"name": name, "version": 1, "updated_at": now, "changed": True}
+
+    current_version = int(row["version"])
+    current_hash = row["content_hash"]
+    if current_hash == content_hash:
+        return {
+            "name": name,
+            "version": current_version,
+            "updated_at": int(row["updated_at"]),
+            "changed": False,
+        }
+
+    next_version = current_version + 1
+    connection.execute(
+        """
+        UPDATE database_versions
+        SET version = ?, content_hash = ?, updated_at = ?
+        WHERE name = ?
+        """,
+        (next_version, content_hash, now, name),
+    )
+    return {"name": name, "version": next_version, "updated_at": now, "changed": True}
+
+
+def refresh_database_versions(
+    main_db_path: str | Path,
+    *,
+    download_db_path: str | Path,
+    city_db_paths: dict[str, Path] | None = None,
+) -> list[dict[str, int | str | bool]]:
+    city_db_paths = city_db_paths or {}
+
+    entries: list[tuple[str, Path, tuple[str, ...]]] = [
+        ("main", Path(main_db_path), ("routes", "paths", "stops", "path_points")),
+        ("download", Path(download_db_path), ("routes", "paths")),
+    ]
+    for city_name, city_path in sorted(city_db_paths.items()):
+        entries.append((city_name, Path(city_path), ("stops", "path_points")))
+
+    hashes: dict[str, str] = {}
+    for name, db_path, tables in entries:
+        if not db_path.exists():
+            continue
+        hashes[name] = hash_tables(db_path, tables)
+
+    if not hashes:
+        return []
+
+    now = int(time.time())
+    with get_connection(main_db_path) as connection:
+        results = [
+            _upsert_database_version(connection, name, content_hash, now)
+            for name, content_hash in hashes.items()
+        ]
+        connection.commit()
+    return results
+
+
+def load_database_version(connection: sqlite3.Connection, name: str) -> dict | None:
+    row = connection.execute(
+        "SELECT name, version, updated_at FROM database_versions WHERE name = ?",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "name": row["name"],
+        "version": int(row["version"]),
+        "updated_at": int(row["updated_at"]),
+    }
