@@ -23,8 +23,11 @@ Optional:
   - Default: all supported `CityBus` cities/counties in Taiwan
   - Example: `Taipei,NewTaipei,Taoyuan`
 - `BUS_DB_PATH`
-  - SQLite database path.
+  - Primary SQLite database path.
   - Default: `./bus.db`
+- `BUS_DOWNLOAD_DB_PATH`
+  - Downloadable SQLite database path without `path_points`.
+  - Default: `./downloads/bus.db`
 - `REALTIME_CACHE_TTL`
   - In-memory realtime cache TTL in seconds.
   - Default: `15`
@@ -62,6 +65,8 @@ python -m app.sync_static
 
 By default this syncs all supported `CityBus` cities/counties. If you only want a subset, set `TDX_CITIES` or pass `--cities`.
 
+After static sync finishes, the server also builds a second downloadable database without the `path_points` table. That smaller file is what `GET /downloads/bus.db` serves.
+
 Optional: override the cities for one run:
 
 ```bash
@@ -86,11 +91,18 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 - `GET /downloads/bus.db`
 - `GET /api/v1/routes/{routeid}/realtime`
+- `GET /api/v1/routes/{routeid}/paths/{pathid}/points`
 
 Example:
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime
+```
+
+Path shape example:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/routes/TPE307/paths/0/points
 ```
 
 ## Notes
@@ -99,4 +111,5 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime
 - TDX authentication uses `client_credentials`.
 - Access tokens are cached in memory and reused until near expiration.
 - Static sync replaces old route data atomically per route.
+- `GET /downloads/bus.db` serves the stripped database without `path_points`.
 - Realtime snapshots are cached in memory inside the server process.

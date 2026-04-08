@@ -53,6 +53,42 @@ CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
 CREATE INDEX IF NOT EXISTS idx_path_points_routeid ON path_points(routeid);
 """
 
+DOWNLOAD_SCHEMA_SQL = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS routes (
+    routeid     TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    name_en     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS paths (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    PRIMARY KEY (routeid, pathid),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS stops (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    stopid      TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
+CREATE INDEX IF NOT EXISTS idx_stops_routeid ON stops(routeid);
+CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
+"""
+
 
 def _configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
@@ -81,12 +117,97 @@ def init_db(db_path: str | Path) -> None:
         connection.commit()
 
 
+def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -> None:
+    source_path = Path(source_db_path)
+    target_path = Path(target_db_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
+    if temp_path.exists():
+        temp_path.unlink()
+
+    with get_connection(source_path) as source_connection, get_connection(temp_path) as target_connection:
+        target_connection.executescript(DOWNLOAD_SCHEMA_SQL)
+
+        routes = source_connection.execute(
+            "SELECT routeid, name, name_en FROM routes ORDER BY routeid"
+        ).fetchall()
+        target_connection.executemany(
+            "INSERT INTO routes (routeid, name, name_en) VALUES (?, ?, ?)",
+            [(row["routeid"], row["name"], row["name_en"]) for row in routes],
+        )
+
+        paths = source_connection.execute(
+            "SELECT routeid, pathid, name, name_en FROM paths ORDER BY routeid, pathid"
+        ).fetchall()
+        target_connection.executemany(
+            "INSERT INTO paths (routeid, pathid, name, name_en) VALUES (?, ?, ?, ?)",
+            [(row["routeid"], row["pathid"], row["name"], row["name_en"]) for row in paths],
+        )
+
+        stops = source_connection.execute(
+            """
+            SELECT routeid, pathid, seq, stopid, name, name_en, lat, lon
+            FROM stops
+            ORDER BY routeid, pathid, seq
+            """
+        ).fetchall()
+        target_connection.executemany(
+            """
+            INSERT INTO stops (routeid, pathid, seq, stopid, name, name_en, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["seq"],
+                    row["stopid"],
+                    row["name"],
+                    row["name_en"],
+                    row["lat"],
+                    row["lon"],
+                )
+                for row in stops
+            ],
+        )
+        target_connection.commit()
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path.replace(target_path)
+
+
 def route_exists(connection: sqlite3.Connection, routeid: str) -> bool:
     row = connection.execute(
         "SELECT 1 FROM routes WHERE routeid = ? LIMIT 1",
         (routeid,),
     ).fetchone()
     return row is not None
+
+
+def path_exists(connection: sqlite3.Connection, routeid: str, pathid: int) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM paths WHERE routeid = ? AND pathid = ? LIMIT 1",
+        (routeid, pathid),
+    ).fetchone()
+    return row is not None
+
+
+def load_path_points(
+    connection: sqlite3.Connection,
+    routeid: str,
+    pathid: int,
+) -> list[tuple[float, float]]:
+    rows = connection.execute(
+        """
+        SELECT lat, lon
+        FROM path_points
+        WHERE routeid = ? AND pathid = ?
+        ORDER BY seq
+        """,
+        (routeid, pathid),
+    ).fetchall()
+    return [(float(row["lat"]), float(row["lon"])) for row in rows]
 
 
 def load_route_static(connection: sqlite3.Connection, routeid: str) -> dict | None:

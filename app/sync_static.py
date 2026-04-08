@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.config import Settings, get_settings
-from app.db import get_connection, init_db
+from app.db import export_download_db, get_connection, init_db
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient
 
@@ -67,7 +67,7 @@ def _path_name_from_subroute(subroute: dict | None) -> tuple[str, str | None]:
         or (subroute.get("DestinationStopNameEn") or "").strip()
     )
     if destination:
-        return f"往{destination}", None
+        return f"\u5f80{destination}", None
 
     name_zh, name_en = _name_parts(subroute.get("SubRouteName"))
     return name_zh or subroute.get("SubRouteUID") or "Unknown", name_en
@@ -246,6 +246,9 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                     f"[sync_static] city={city} routes={len(static_routes)} "
                     f"stop_of_route={len(stop_of_route_items)} shapes={len(shapes)}"
                 )
+
+        export_download_db(settings.db_path, settings.download_db_path)
+        print(f"[sync_static] built download db at {settings.download_db_path}")
     finally:
         client.close()
         token_manager.close()

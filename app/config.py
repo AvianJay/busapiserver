@@ -106,6 +106,7 @@ def _split_csv(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
 class Settings:
     project_dir: Path
     db_path: Path
+    download_db_path: Path
     tdx_client_id: str | None
     tdx_client_secret: str | None
     tdx_base_url: str
@@ -123,9 +124,13 @@ class Settings:
         project_dir = Path(__file__).resolve().parent.parent
         load_dotenv(project_dir / ".env")
         db_path = Path(os.getenv("BUS_DB_PATH", project_dir / "bus.db")).resolve()
+        download_db_path = Path(
+            os.getenv("BUS_DOWNLOAD_DB_PATH", project_dir / "downloads" / "bus.db")
+        ).resolve()
         return cls(
             project_dir=project_dir,
             db_path=db_path,
+            download_db_path=download_db_path,
             tdx_client_id=os.getenv("TDX_CLIENT_ID"),
             tdx_client_secret=os.getenv("TDX_CLIENT_SECRET"),
             tdx_base_url=os.getenv("TDX_BASE_URL", DEFAULT_TDX_BASE_URL).rstrip("/"),
