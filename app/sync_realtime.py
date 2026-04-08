@@ -63,7 +63,7 @@ def _build_message(item: dict[str, Any]) -> str:
     if estimate_time is not None:
         estimate_time = int(estimate_time)
         if estimate_time <= 30:
-            return "\u5373\u5c07\u9032\u7ad9"
+            return "進站中"
         return f"{max(1, math.ceil(estimate_time / 60))} \u5206"
 
     if item.get("IsLastBus"):
@@ -87,14 +87,10 @@ def _to_int_or_none(value: Any) -> int | None:
 
 def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: str) -> list[PlateObservation]:
     observations: list[PlateObservation] = []
-    stop_status = _to_int_or_none(item.get("StopStatus"))
-
-    # StopStatus=1 means "not yet departed" in N1; avoid pinning these buses on first stop.
-    allow_non_arriving_plate = stop_status not in {1, 2, 3, 4}
 
     top_plate = (item.get("PlateNumb") or "").strip()
     top_is_arriving = item.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
-    if top_plate and top_plate != "-1" and (allow_non_arriving_plate or top_is_arriving):
+    if top_plate and top_plate != "-1" and top_is_arriving:
         observations.append(
             PlateObservation(
                 plate=top_plate,
@@ -110,7 +106,9 @@ def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: st
         if not estimate_plate or estimate_plate == "-1":
             continue
         estimate_is_arriving = estimate.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
-        if not allow_non_arriving_plate and not estimate_is_arriving:
+        # N1 Estimates is often a list of multiple upcoming buses for a stop.
+        # Only trust estimate plates when API explicitly marks "arriving".
+        if not estimate_is_arriving:
             continue
         observations.append(
             PlateObservation(

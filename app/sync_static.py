@@ -184,6 +184,27 @@ def _city_temp_db_path(city_db_path: Path) -> Path:
     return city_db_path.with_suffix(f"{city_db_path.suffix}.tmp")
 
 
+def _should_use_terminal_stop_name(path_name: str | None) -> bool:
+    if not path_name:
+        return True
+    return any(separator in path_name for separator in (" - ", "－", "|", "→", "<->", "↔"))
+
+
+def _normalize_path_names_from_stops(static_routes: dict[str, StaticRoute]) -> None:
+    for route in static_routes.values():
+        for path in route.paths.values():
+            if not path.stops:
+                continue
+            if not _should_use_terminal_stop_name(path.name):
+                continue
+
+            terminal_stop = path.stops[-1]
+            if terminal_stop.name:
+                path.name = terminal_stop.name
+            if terminal_stop.name_en:
+                path.name_en = terminal_stop.name_en
+
+
 def _resource_key(city: str, resource: str) -> str:
     return f"static:{city}:{resource}"
 
@@ -365,6 +386,8 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                     )
                     if not path.points:
                         path.points = _parse_geometry(item.get("Geometry"))
+
+                _normalize_path_names_from_stops(static_routes)
 
                 prefix = CITY_NAME_TO_PREFIX.get(city)
                 if prefix:
