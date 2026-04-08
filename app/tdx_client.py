@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 import random
 import threading
@@ -11,6 +12,17 @@ import requests
 
 from app.config import Settings
 from app.tdx_auth import TDXTokenManager
+
+
+@dataclass
+class TDXJSONResponse:
+    payload: Any
+    status_code: int
+    last_modified: str | None
+
+    @property
+    def not_modified(self) -> bool:
+        return self.status_code == 304
 
 
 class TDXClient:
@@ -51,13 +63,15 @@ class TDXClient:
         jitter = random.uniform(0.0, max(0.25, self.settings.tdx_retry_backoff))
         return base_delay + jitter
 
-    def _request_json(
+    def _request_json_with_meta(
         self,
         path: str,
         *,
         params: dict[str, Any] | None = None,
         retry_on_401: bool = True,
-    ) -> Any:
+        if_modified_since: str | None = None,
+        allow_not_modified: bool = False,
+    ) -> TDXJSONResponse:
         url = f"{self.settings.tdx_base_url}{path}"
         last_error: Exception | None = None
 
@@ -69,6 +83,8 @@ class TDXClient:
                 "Accept": "application/json",
                 "Accept-Encoding": "gzip",
             }
+            if if_modified_since:
+                headers["If-Modified-Since"] = if_modified_since
             response = self._session.get(
                 url,
                 headers=headers,
@@ -79,6 +95,13 @@ class TDXClient:
                 self.token_manager.invalidate()
                 retry_on_401 = False
                 continue
+
+            if response.status_code == 304 and allow_not_modified:
+                return TDXJSONResponse(
+                    payload=None,
+                    status_code=response.status_code,
+                    last_modified=response.headers.get("Last-Modified"),
+                )
 
             if response.status_code == 429 and attempt < self.settings.tdx_retry_attempts:
                 delay = self._retry_delay(response, attempt)
@@ -103,11 +126,28 @@ class TDXClient:
             except requests.HTTPError as exc:
                 last_error = exc
                 break
-            return response.json()
+            return TDXJSONResponse(
+                payload=response.json(),
+                status_code=response.status_code,
+                last_modified=response.headers.get("Last-Modified"),
+            )
 
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"Request failed without a response for {path}")
+
+    def _request_json(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        retry_on_401: bool = True,
+    ) -> Any:
+        return self._request_json_with_meta(
+            path,
+            params=params,
+            retry_on_401=retry_on_401,
+        ).payload
 
     def fetch_paginated_items(
         self,
@@ -143,6 +183,64 @@ class TDXClient:
             skip += len(batch)
 
         return items
+
+    def fetch_paginated_items_conditional(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        page_size: int = 1000,
+        if_modified_since: str | None = None,
+    ) -> TDXJSONResponse:
+        items: list[dict[str, Any]] = []
+        skip = 0
+
+        while True:
+            page_params = {
+                "$top": page_size,
+                "$skip": skip,
+                "$format": "JSON",
+            }
+            if params:
+                page_params.update(params)
+
+            page = self._request_json_with_meta(
+                path,
+                params=page_params,
+                if_modified_since=if_modified_since if skip == 0 else None,
+                allow_not_modified=True,
+            )
+
+            if page.not_modified:
+                return TDXJSONResponse(
+                    payload=[],
+                    status_code=page.status_code,
+                    last_modified=page.last_modified,
+                )
+
+            payload = page.payload
+            if isinstance(payload, list):
+                batch = payload
+            elif isinstance(payload, dict):
+                batch = payload.get("Items") or []
+            else:
+                break
+
+            batch = list(batch)
+            items.extend(batch)
+            if len(batch) < page_size:
+                return TDXJSONResponse(
+                    payload=items,
+                    status_code=page.status_code,
+                    last_modified=page.last_modified,
+                )
+            skip += len(batch)
+
+        return TDXJSONResponse(
+            payload=items,
+            status_code=200,
+            last_modified=None,
+        )
 
     def fetch_routes(self, city: str) -> list[dict[str, Any]]:
         return self.fetch_paginated_items(f"/v2/Bus/Route/City/{city}")

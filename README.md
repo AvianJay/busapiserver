@@ -121,6 +121,9 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/paths/0/points
 - All API timestamps are Unix timestamps in seconds.
 - TDX authentication uses `client_credentials`.
 - Access tokens are cached in memory and reused until near expiration.
+- Static sync uses TDX `Last-Modified` / `If-Modified-Since` for conditional requests.
+- Static sync metadata is persisted in `tdx_fetch_state` (resource key, last-modified, status, check/update times).
+- If all static resources (`Route`, `StopOfRoute`, `Shape`) return `304`, that city is skipped.
 - Static sync replaces old route data atomically per route.
 - the primary `bus.db` remains the full internal database
 - `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`

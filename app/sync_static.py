@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,9 +14,11 @@ from app.db import (
     get_connection,
     init_city_db,
     init_db,
+    load_tdx_fetch_state,
+    save_tdx_fetch_state,
 )
 from app.tdx_auth import TDXTokenManager
-from app.tdx_client import TDXClient
+from app.tdx_client import TDXClient, TDXJSONResponse
 
 
 POINT_PAIR_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)")
@@ -181,6 +184,32 @@ def _city_temp_db_path(city_db_path: Path) -> Path:
     return city_db_path.with_suffix(f"{city_db_path.suffix}.tmp")
 
 
+def _resource_key(city: str, resource: str) -> str:
+    return f"static:{city}:{resource}"
+
+
+def _persist_fetch_state(
+    connection,
+    city: str,
+    resource: str,
+    response: TDXJSONResponse,
+    checked_at: int,
+    previous_state: dict | None,
+) -> None:
+    previous_last_modified = None if previous_state is None else previous_state.get("last_modified")
+    previous_updated_at = None if previous_state is None else previous_state.get("last_updated_at")
+    effective_last_modified = response.last_modified or previous_last_modified
+
+    save_tdx_fetch_state(
+        connection,
+        _resource_key(city, resource),
+        last_modified=effective_last_modified,
+        last_status=response.status_code,
+        last_checked_at=checked_at,
+        last_updated_at=checked_at if not response.not_modified else previous_updated_at,
+    )
+
+
 def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> None:
     settings.require_tdx_credentials()
     init_db(settings.db_path)
@@ -193,9 +222,61 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
         with get_connection(settings.db_path) as connection:
             for city in effective_cities:
                 print(f"[sync_static] syncing city={city}")
-                routes = client.fetch_routes(city)
-                stop_of_route_items = client.fetch_stop_of_route(city)
-                shapes = client.fetch_shapes(city)
+
+                routes_state = load_tdx_fetch_state(connection, _resource_key(city, "routes"))
+                stops_state = load_tdx_fetch_state(connection, _resource_key(city, "stop_of_route"))
+                shapes_state = load_tdx_fetch_state(connection, _resource_key(city, "shapes"))
+
+                routes_response = client.fetch_paginated_items_conditional(
+                    f"/v2/Bus/Route/City/{city}",
+                    if_modified_since=None if routes_state is None else routes_state.get("last_modified"),
+                )
+                stops_response = client.fetch_paginated_items_conditional(
+                    f"/v2/Bus/StopOfRoute/City/{city}",
+                    if_modified_since=None if stops_state is None else stops_state.get("last_modified"),
+                )
+                shapes_response = client.fetch_paginated_items_conditional(
+                    f"/v2/Bus/Shape/City/{city}",
+                    if_modified_since=None if shapes_state is None else shapes_state.get("last_modified"),
+                )
+
+                checked_at = int(time.time())
+                _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
+                _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
+                _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
+
+                if (
+                    routes_response.not_modified
+                    and stops_response.not_modified
+                    and shapes_response.not_modified
+                ):
+                    print(f"[sync_static] city={city} no static updates (all resources returned 304)")
+                    continue
+
+                if routes_response.not_modified:
+                    routes_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/Route/City/{city}",
+                        if_modified_since=None,
+                    )
+                    _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
+
+                if stops_response.not_modified:
+                    stops_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/StopOfRoute/City/{city}",
+                        if_modified_since=None,
+                    )
+                    _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
+
+                if shapes_response.not_modified:
+                    shapes_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/Shape/City/{city}",
+                        if_modified_since=None,
+                    )
+                    _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
+
+                routes = routes_response.payload or []
+                stop_of_route_items = stops_response.payload or []
+                shapes = shapes_response.payload or []
 
                 subroute_lookup = {}
                 static_routes: dict[str, StaticRoute] = {}
@@ -308,7 +389,9 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                 print(
                     f"[sync_static] city={city} routes={len(static_routes)} "
                     f"stop_of_route={len(stop_of_route_items)} shapes={len(shapes)} "
-                    f"city_db={city_db_path.name}"
+                    f"city_db={city_db_path.name} "
+                    f"status(routes/stops/shapes)="
+                    f"{routes_response.status_code}/{stops_response.status_code}/{shapes_response.status_code}"
                 )
 
         export_download_db(settings.db_path, settings.download_db_path)

@@ -51,6 +51,16 @@ CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
 CREATE INDEX IF NOT EXISTS idx_stops_routeid ON stops(routeid);
 CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
 CREATE INDEX IF NOT EXISTS idx_path_points_routeid ON path_points(routeid);
+
+CREATE TABLE IF NOT EXISTS tdx_fetch_state (
+    resource_key    TEXT PRIMARY KEY,
+    last_modified   TEXT,
+    last_status     INTEGER NOT NULL,
+    last_checked_at INTEGER NOT NULL,
+    last_updated_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_tdx_fetch_state_checked_at ON tdx_fetch_state(last_checked_at);
 """
 
 DOWNLOAD_SCHEMA_SQL = """
@@ -279,3 +289,48 @@ def load_route_static(connection: sqlite3.Connection, routeid: str) -> dict | No
         "name_en": route_row["name_en"],
         "paths": paths,
     }
+
+
+def load_tdx_fetch_state(connection: sqlite3.Connection, resource_key: str) -> dict | None:
+    row = connection.execute(
+        """
+        SELECT resource_key, last_modified, last_status, last_checked_at, last_updated_at
+        FROM tdx_fetch_state
+        WHERE resource_key = ?
+        """,
+        (resource_key,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    return {
+        "resource_key": row["resource_key"],
+        "last_modified": row["last_modified"],
+        "last_status": row["last_status"],
+        "last_checked_at": row["last_checked_at"],
+        "last_updated_at": row["last_updated_at"],
+    }
+
+
+def save_tdx_fetch_state(
+    connection: sqlite3.Connection,
+    resource_key: str,
+    *,
+    last_modified: str | None,
+    last_status: int,
+    last_checked_at: int,
+    last_updated_at: int | None,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO tdx_fetch_state
+            (resource_key, last_modified, last_status, last_checked_at, last_updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(resource_key) DO UPDATE SET
+            last_modified = excluded.last_modified,
+            last_status = excluded.last_status,
+            last_checked_at = excluded.last_checked_at,
+            last_updated_at = excluded.last_updated_at
+        """,
+        (resource_key, last_modified, last_status, last_checked_at, last_updated_at),
+    )
