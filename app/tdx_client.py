@@ -24,7 +24,7 @@ class TDXClient:
         *,
         params: dict[str, Any] | None = None,
         retry_on_401: bool = True,
-    ) -> dict[str, Any]:
+    ) -> Any:
         url = f"{self.settings.tdx_base_url}{path}"
         headers = {
             "Authorization": f"Bearer {self.token_manager.get_access_token()}",
@@ -64,8 +64,11 @@ class TDXClient:
                 page_params.update(params)
 
             payload = self._request_json(path, params=page_params)
-            batch = payload.get("Items") or []
-            if not isinstance(batch, Iterable):
+            if isinstance(payload, list):
+                batch = payload
+            elif isinstance(payload, dict):
+                batch = payload.get("Items") or []
+            else:
                 break
 
             batch = list(batch)
@@ -77,24 +80,21 @@ class TDXClient:
         return items
 
     def fetch_routes(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v3/Bus/Route/City/{city}")
-
-    def fetch_subroutes(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v3/Bus/SubRoute/City/{city}")
+        return self.fetch_paginated_items(f"/v2/Bus/Route/City/{city}")
 
     def fetch_stop_of_route(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v3/Bus/StopOfRoute/City/{city}")
+        return self.fetch_paginated_items(f"/v2/Bus/StopOfRoute/City/{city}")
 
     def fetch_shapes(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v3/Bus/Shape/City/{city}")
+        return self.fetch_paginated_items(f"/v2/Bus/Shape/City/{city}")
 
     def fetch_estimated_time_of_arrival(
         self,
         city: str,
         routeid: str,
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]]:
         return self._request_json(
-            f"/v3/Bus/EstimatedTimeOfArrival/City/{city}",
+            f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
             params={
                 "$filter": f"SubRouteUID eq '{routeid}'",
                 "$format": "JSON",

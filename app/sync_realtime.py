@@ -16,10 +16,10 @@ from app.tdx_client import TDXClient
 
 
 STOP_STATUS_MESSAGES = {
-    1: "尚未發車",
-    2: "交管不停靠",
-    3: "末班車已過",
-    4: "今日未營運",
+    1: "\u5c1a\u672a\u767c\u8eca",
+    2: "\u4ea4\u7ba1\u4e0d\u505c\u9760",
+    3: "\u672b\u73ed\u8eca\u5df2\u904e",
+    4: "\u4eca\u65e5\u672a\u71df\u904b",
 }
 
 
@@ -52,11 +52,11 @@ def _build_message(item: dict[str, Any]) -> str:
     if estimate_time is not None:
         estimate_time = int(estimate_time)
         if estimate_time <= 30:
-            return "即將進站"
-        return f"{max(1, math.ceil(estimate_time / 60))} 分"
+            return "\u5373\u5c07\u9032\u7ad9"
+        return f"{max(1, math.ceil(estimate_time / 60))} \u5206"
 
     if item.get("IsLastBus"):
-        return "末班車"
+        return "\u672b\u73ed\u8eca"
 
     scheduled_time = (item.get("ScheduledTime") or "").strip()
     if scheduled_time:
@@ -109,21 +109,29 @@ class RealtimeService:
             payload = self.client.fetch_estimated_time_of_arrival(city, routeid)
             if wrapper is None:
                 wrapper = payload
-            current_items = payload.get("Items") or []
+            current_items = payload or []
             if current_items:
                 wrapper = payload
                 items = current_items
                 break
 
-        wrapper = wrapper or {"Items": [], "UpdateTime": None}
+        wrapper = wrapper or []
         if not items:
-            items = wrapper.get("Items") or []
+            items = wrapper or []
 
-        updated_at = (
-            _to_unix_seconds(wrapper.get("UpdateTime"))
-            or _to_unix_seconds(wrapper.get("SrcUpdateTime"))
-            or int(time.time())
-        )
+        item_times = []
+        for item in items:
+            item_time = (
+                _to_unix_seconds(item.get("UpdateTime"))
+                or _to_unix_seconds(item.get("DataTime"))
+                or _to_unix_seconds(item.get("SrcRecTime"))
+                or _to_unix_seconds(item.get("SrcTransTime"))
+                or _to_unix_seconds(item.get("SrcUpdateTime"))
+                or _to_unix_seconds(item.get("TransTime"))
+            )
+            if item_time is not None:
+                item_times.append(item_time)
+        updated_at = max(item_times) if item_times else int(time.time())
 
         paths = static_route["paths"]
         grouped: dict[int, dict[str, dict[str, Any]]] = {}
@@ -157,17 +165,29 @@ class RealtimeService:
                 stop_bucket["message"] = _build_message(item)
 
             stop_time = (
-                _to_unix_seconds(item.get("DataTime"))
-                or _to_unix_seconds(item.get("RecTime"))
+                _to_unix_seconds(item.get("UpdateTime"))
+                or _to_unix_seconds(item.get("DataTime"))
+                or _to_unix_seconds(item.get("SrcRecTime"))
+                or _to_unix_seconds(item.get("SrcTransTime"))
                 or _to_unix_seconds(item.get("TransTime"))
+                or _to_unix_seconds(item.get("SrcUpdateTime"))
                 or updated_at
             )
             stop_bucket["time"] = max(stop_bucket["time"], stop_time)
 
+            candidate_plates = []
             plate = (item.get("PlateNumb") or "").strip()
-            if plate and plate != "-1":
-                if all(bus["id"] != plate for bus in stop_bucket["buses"]):
-                    stop_bucket["buses"].append({"id": plate, "type": "normal"})
+            if plate:
+                candidate_plates.append(plate)
+            for estimate in item.get("Estimates") or []:
+                estimate_plate = (estimate.get("PlateNumb") or "").strip()
+                if estimate_plate:
+                    candidate_plates.append(estimate_plate)
+            for candidate_plate in candidate_plates:
+                if candidate_plate == "-1":
+                    continue
+                if all(bus["id"] != candidate_plate for bus in stop_bucket["buses"]):
+                    stop_bucket["buses"].append({"id": candidate_plate, "type": "normal"})
 
         response_paths = []
         seen_pathids = set(paths)

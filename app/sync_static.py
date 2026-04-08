@@ -57,11 +57,15 @@ def _path_name_from_subroute(subroute: dict | None) -> tuple[str, str | None]:
     if not subroute:
         return "Unknown", None
 
-    headsign = (subroute.get("HeadSign") or "").strip()
+    headsign = (subroute.get("HeadSign") or subroute.get("Headsign") or "").strip()
     if headsign:
         return headsign, None
 
-    destination = _name_text(subroute.get("DestinationStopName"))
+    destination = (
+        _name_text(subroute.get("DestinationStopName"))
+        or (subroute.get("DestinationStopNameZh") or "").strip()
+        or (subroute.get("DestinationStopNameEn") or "").strip()
+    )
     if destination:
         return f"往{destination}", None
 
@@ -144,44 +148,38 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
             for city in effective_cities:
                 print(f"[sync_static] syncing city={city}")
                 routes = client.fetch_routes(city)
-                subroutes = client.fetch_subroutes(city)
                 stop_of_route_items = client.fetch_stop_of_route(city)
                 shapes = client.fetch_shapes(city)
 
-                route_lookup = {item.get("RouteUID"): item for item in routes}
                 subroute_lookup = {}
                 static_routes: dict[str, StaticRoute] = {}
 
-                for item in subroutes:
-                    routeid = item.get("SubRouteUID") or item.get("RouteUID")
-                    if not routeid:
-                        continue
+                for route in routes:
+                    for item in route.get("SubRoutes") or []:
+                        routeid = item.get("SubRouteUID") or route.get("RouteUID")
+                        if not routeid:
+                            continue
 
-                    route_name, route_name_en = _name_parts(item.get("SubRouteName"))
-                    if not route_name:
-                        route_name, route_name_en = _name_parts(item.get("RouteName"))
-                    if not route_name:
-                        route_fallback = route_lookup.get(item.get("RouteUID"))
-                        route_name, route_name_en = _name_parts(
-                            route_fallback.get("RouteName") if route_fallback else None
+                        route_name, route_name_en = _name_parts(item.get("SubRouteName"))
+                        if not route_name:
+                            route_name, route_name_en = _name_parts(route.get("RouteName"))
+
+                        static_route = static_routes.setdefault(
+                            routeid,
+                            StaticRoute(
+                                routeid=routeid,
+                                name=route_name or routeid,
+                                name_en=route_name_en,
+                            ),
                         )
 
-                    static_route = static_routes.setdefault(
-                        routeid,
-                        StaticRoute(
-                            routeid=routeid,
-                            name=route_name or routeid,
-                            name_en=route_name_en,
-                        ),
-                    )
-
-                    pathid = int(item.get("Direction") or 0)
-                    path_name, path_name_en = _path_name_from_subroute(item)
-                    static_route.paths.setdefault(
-                        pathid,
-                        StaticPath(pathid=pathid, name=path_name, name_en=path_name_en),
-                    )
-                    subroute_lookup[(routeid, pathid)] = item
+                        pathid = int(item.get("Direction") or 0)
+                        path_name, path_name_en = _path_name_from_subroute(item)
+                        static_route.paths.setdefault(
+                            pathid,
+                            StaticPath(pathid=pathid, name=path_name, name_en=path_name_en),
+                        )
+                        subroute_lookup[(routeid, pathid)] = item
 
                 for item in stop_of_route_items:
                     routeid = item.get("SubRouteUID") or item.get("RouteUID")
