@@ -30,7 +30,7 @@ Optional:
   - Default: `./downloads/bus.db`
 - `REALTIME_CACHE_TTL`
   - In-memory realtime cache TTL in seconds.
-  - Default: `15`
+  - Default: `5`
 - `TDX_REQUEST_TIMEOUT`
   - Upstream request timeout in seconds.
   - Default: `30`

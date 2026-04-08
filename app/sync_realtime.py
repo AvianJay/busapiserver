@@ -54,9 +54,30 @@ def _to_unix_seconds(value: str | None) -> int | None:
     return int(dt.timestamp())
 
 
+def _to_hhmm(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return dt.strftime("%H:%M")
+
+
 def _build_message(item: dict[str, Any]) -> str:
     stop_status = item.get("StopStatus")
-    if stop_status in STOP_STATUS_MESSAGES:
+
+    if stop_status == 1:
+        scheduled_time = (item.get("ScheduledTime") or "").strip()
+        if scheduled_time:
+            return scheduled_time
+        next_bus_time = _to_hhmm(item.get("NextBusTime"))
+        if next_bus_time:
+            return next_bus_time
+        return STOP_STATUS_MESSAGES[1]
+
+    if stop_status in {2, 3, 4}:
         return STOP_STATUS_MESSAGES[stop_status]
 
     estimate_time = item.get("EstimateTime")
