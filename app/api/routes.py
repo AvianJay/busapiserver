@@ -19,8 +19,11 @@ router = APIRouter()
 
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
+BUSES_CACHE_TTL_SECONDS = 5
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
+_buses_cache_lock = threading.Lock()
+_buses_cache: MutableMapping[str, tuple[float, list[dict]]] = {}
 
 
 def _get_client_ip(request: Request) -> str:
@@ -59,6 +62,28 @@ def _check_route_rate_limit(request: Request) -> None:
             )
 
         hits.append(now)
+
+
+def _get_cached_route_buses(routeid: str, *, allow_expired: bool = False) -> list[dict] | None:
+    now = time.monotonic()
+    with _buses_cache_lock:
+        cached = _buses_cache.get(routeid)
+        if cached is None:
+            return None
+
+        expires_at, payload = cached
+        if not allow_expired and expires_at < now:
+            return None
+
+        return [dict(item) for item in payload]
+
+
+def _set_cached_route_buses(routeid: str, payload: list[dict]) -> None:
+    with _buses_cache_lock:
+        _buses_cache[routeid] = (
+            time.monotonic() + BUSES_CACHE_TTL_SECONDS,
+            [dict(item) for item in payload],
+        )
 
 
 def _encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> str:
@@ -148,6 +173,10 @@ def get_route_buses(routeid: str, request: Request) -> list[dict]:
     if static_route is None:
         raise HTTPException(status_code=404, detail=f"Route {routeid} was not found.")
 
+    cached = _get_cached_route_buses(routeid)
+    if cached is not None:
+        return cached
+
     client = request.app.state.tdx_client
     items: list[dict] = []
     try:
@@ -157,6 +186,9 @@ def get_route_buses(routeid: str, request: Request) -> list[dict]:
                 items = current_items
                 break
     except requests.RequestException as exc:
+        stale = _get_cached_route_buses(routeid, allow_expired=True)
+        if stale is not None:
+            return stale
         raise HTTPException(status_code=502, detail="TDX upstream request failed.") from exc
 
     buses_by_plate: dict[str, dict] = {}
@@ -201,7 +233,9 @@ def get_route_buses(routeid: str, request: Request) -> list[dict]:
         if next_time is not None and (existing_time is None or next_time > existing_time):
             buses_by_plate[plate] = bus
 
-    return list(buses_by_plate.values())
+    response = list(buses_by_plate.values())
+    _set_cached_route_buses(routeid, response)
+    return response
 
 
 @router.get("/api/v1/routes/{routeid}/paths/{pathid}/points")
