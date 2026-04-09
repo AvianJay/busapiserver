@@ -95,6 +95,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 - `GET /downloads/bus.db`
 - `GET /api/v1/routes/{routeid}/realtime`
+- `GET /api/v1/routes/{routeid}/realtime/buses`
 - `GET /api/v1/routes/{routeid}/stops`
 - `GET /api/v1/routes/{routeid}/paths/{pathid}/points`
 - `GET /api/v1/database/{name}/version`
@@ -109,6 +110,29 @@ Stops example:
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/routes/TPE307/stops
+```
+
+Buses position example:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime/buses
+```
+
+The `/api/v1/routes/{routeid}/realtime/buses` response format is:
+
+```json
+[
+  {
+    "id": "ABC-1234",
+    "direction": 0,
+    "lat": 25.0478,
+    "lon": 121.5319,
+    "speed": 32,
+    "azimuth": 120,
+    "status": 0,
+    "time": 1712654400
+  }
+]
 ```
 
 Path shape example:

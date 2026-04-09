@@ -264,3 +264,22 @@ class TDXClient:
                 "$top": 2000,
             },
         )
+
+    def fetch_realtime_by_frequency(
+        self,
+        city: str,
+        routeid: str,
+    ) -> list[dict[str, Any]]:
+        payload = self._request_json(
+            f"/v2/Bus/RealTimeByFrequency/City/{city}",
+            params={
+                "$filter": f"SubRouteUID eq '{routeid}'",
+                "$format": "JSON",
+                "$top": 2000,
+            },
+        )
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            return list(payload.get("Items") or [])
+        return []
