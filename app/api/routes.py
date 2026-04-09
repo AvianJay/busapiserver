@@ -37,6 +37,9 @@ def _check_route_rate_limit(request: Request) -> None:
     if not isinstance(route_template, str) or not route_template.startswith("/api/v1/routes/"):
         return
 
+    if "realtime" in route_template:
+        route_template = "/api/v1/routes/realtime"
+
     ip = _get_client_ip(request)
     now = time.monotonic()
     window_start = now - RATE_LIMIT_WINDOW_SECONDS
@@ -51,7 +54,7 @@ def _check_route_rate_limit(request: Request) -> None:
             retry_after = max(1, int(hits[0] + RATE_LIMIT_WINDOW_SECONDS - now))
             raise HTTPException(
                 status_code=429,
-                detail="Too many requests. Limit is 30 requests per minute per endpoint.",
+                detail="Too many requests. Please try again later.",
                 headers={"Retry-After": str(retry_after)},
             )
 
