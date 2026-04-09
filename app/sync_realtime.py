@@ -253,7 +253,7 @@ class RealtimeService:
                 or _to_unix_seconds(item.get("SrcUpdateTime"))
                 or updated_at
             )
-            stop_bucket["time"] = max(stop_bucket["time"], stop_time)
+            # stop_bucket["time"] = max(stop_bucket["time"], stop_time)
 
             for observation in _collect_plate_observations(item, pathid=pathid, stopid=stopid):
                 plate_candidates.setdefault((observation.pathid, observation.plate), []).append(observation)
