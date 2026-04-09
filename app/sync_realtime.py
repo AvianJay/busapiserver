@@ -229,7 +229,7 @@ class RealtimeService:
                     "stopid": stopid,
                     "eta": None,
                     "message": "",
-                    "time": updated_at,
+                    # "time": updated_at,
                     "buses": [],
                 },
             )
