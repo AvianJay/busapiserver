@@ -8,11 +8,11 @@ import threading
 import time
 
 import requests
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
-from app.config import guess_city_from_routeid
+from app.config import CITY_NAME_TO_PREFIX, guess_city_from_routeid
 from app.sync_realtime import RouteNotFoundError
 
 
@@ -144,6 +144,22 @@ def _candidate_cities_for_route(routeid: str, configured_cities: tuple[str, ...]
     return cities
 
 
+_city_name_to_prefix_lower = {
+    city.lower(): prefix for city, prefix in CITY_NAME_TO_PREFIX.items()
+}
+
+
+def _resolve_city_prefix(city: str) -> str | None:
+    normalized = city.strip()
+    if not normalized:
+        return None
+
+    if len(normalized) == 3 and normalized.isalpha():
+        return normalized.upper()
+
+    return _city_name_to_prefix_lower.get(normalized.lower())
+
+
 @router.get("/downloads/bus.db")
 def download_bus_db(request: Request) -> FileResponse:
     db_path = request.app.state.settings.download_db_path
@@ -175,6 +191,63 @@ def get_route_realtime(routeid: str, request: Request) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail="TDX upstream request failed.") from exc
+
+
+@router.get("/api/v1/cities/{city}/routes")
+def search_city_routes(
+    city: str,
+    request: Request,
+    query: str = Query(default="", max_length=120),
+    limit: int = Query(default=80, ge=1, le=200),
+) -> list[dict]:
+    prefix = _resolve_city_prefix(city)
+    if prefix is None:
+        raise HTTPException(status_code=404, detail=f"City {city} was not found.")
+
+    normalized_query = query.strip()
+    name_clause = ""
+    args: list[object] = [prefix]
+    if normalized_query:
+        name_clause = " AND (routes.name LIKE ? OR paths.name LIKE ?)"
+        wildcard = f"%{normalized_query}%"
+        args.extend([wildcard, wildcard])
+
+    args.append(limit)
+
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                routes.routeid AS routeid,
+                routes.name AS route_name,
+                routes.name_en AS route_name_en,
+                paths.pathid AS pathid,
+                paths.name AS path_name,
+                paths.name_en AS path_name_en,
+                SUBSTR(routes.routeid, 1, 3) AS city_code
+            FROM routes
+            JOIN paths ON paths.routeid = routes.routeid
+            WHERE SUBSTR(routes.routeid, 1, 3) = ?
+            {name_clause}
+            ORDER BY routes.routeid ASC, paths.pathid ASC
+            LIMIT ?
+            """,
+            tuple(args),
+        ).fetchall()
+
+    return [
+        {
+            "routeid": row["routeid"],
+            "route_name": row["route_name"],
+            "route_name_en": row["route_name_en"],
+            "pathid": int(row["pathid"]),
+            "path_name": row["path_name"],
+            "path_name_en": row["path_name_en"],
+            "city_code": row["city_code"],
+        }
+        for row in rows
+    ]
 
 
 @router.get("/api/v1/routes/{routeid}/realtime/buses")

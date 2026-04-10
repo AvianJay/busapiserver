@@ -26,7 +26,7 @@ Optional:
   - Primary SQLite database path. This remains the full database with `routes`, `paths`, `stops`, and `path_points`.
   - Default: `./bus.db`
 - `BUS_DOWNLOAD_DB_PATH`
-  - Downloadable SQLite database path with only `routes` and `paths`.
+  - Downloadable SQLite database path with route catalog only.
   - Default: `./downloads/bus.db`
 - `REALTIME_CACHE_TTL`
   - In-memory realtime cache TTL in seconds.
@@ -68,8 +68,8 @@ By default this syncs all supported `CityBus` cities/counties. If you only want 
 After static sync finishes:
 
 - the primary `./bus.db` remains the full database
-- `./downloads/bus.db` contains only `routes` and `paths`
-- `./downloads/{City}.db` contains that city's `stops` and `path_points`
+- `./downloads/bus.db` contains a route catalog (`routes`) with `city_code` and path metadata (`pathid`, `path_name`)
+- `./downloads/{City}.db` contains that city's `routes`, `paths`, and `stops` (no `path_points`)
 
 Optional: override the cities for one run:
 
@@ -95,6 +95,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 - `GET /downloads/bus.db`
 - `GET /downloads/{City}.db` (for example: `Taipei`, `NewTaipei`, `Taichung`)
+- `GET /api/v1/cities/{city}/routes?query=307`
 - `GET /api/v1/routes/{routeid}/realtime`
 - `GET /api/v1/routes/{routeid}/realtime/buses`
 - `GET /api/v1/routes/{routeid}/stops`
@@ -175,5 +176,6 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 - Supported database version names: `main`, `download`, and city names like `Taichung`.
 - the primary `bus.db` remains the full internal database
 - `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`
-- `downloads/{City}.db` stores `stops` and `path_points` for that city.
+- `GET /downloads/bus.db` now stores route catalog rows with `city_code` and path metadata.
+- `downloads/{City}.db` stores `routes`, `paths`, and `stops` for that city; path points are API-only.
 - Realtime snapshots are cached in memory inside the server process.
