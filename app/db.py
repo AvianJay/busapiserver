@@ -95,7 +95,9 @@ CREATE TABLE IF NOT EXISTS routes (
     routeid     TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     name_en     TEXT,
-    city_code   TEXT NOT NULL
+    city_code   TEXT NOT NULL,
+    path_name   TEXT NOT NULL,
+    path_name_en TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paths (

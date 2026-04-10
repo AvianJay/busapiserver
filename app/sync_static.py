@@ -150,10 +150,18 @@ def _replace_city_route(connection, route: StaticRoute) -> None:
     city_code = route.routeid[:3].upper()
     connection.execute(
         """
-        INSERT OR REPLACE INTO routes (routeid, name, name_en, city_code)
-        VALUES (?, ?, ?, ?)
+        INSERT OR REPLACE INTO routes
+        (routeid, name, name_en, city_code, path_name, path_name_en)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (route.routeid, route.name, route.name_en, city_code),
+        (
+            route.routeid,
+            route.name,
+            route.name_en,
+            city_code,
+            route.name,
+            route.name_en,
+        ),
     )
     connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
     connection.execute("DELETE FROM stops WHERE routeid = ?", (route.routeid,))

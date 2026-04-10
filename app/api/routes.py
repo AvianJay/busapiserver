@@ -4,6 +4,7 @@ from collections import deque
 from collections.abc import MutableMapping
 from datetime import datetime, timezone
 import re
+import sqlite3
 import threading
 import time
 
@@ -12,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
-from app.config import CITY_NAME_TO_PREFIX, guess_city_from_routeid
+from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME, guess_city_from_routeid
 from app.sync_realtime import RouteNotFoundError
 
 
@@ -147,17 +148,28 @@ def _candidate_cities_for_route(routeid: str, configured_cities: tuple[str, ...]
 _city_name_to_prefix_lower = {
     city.lower(): prefix for city, prefix in CITY_NAME_TO_PREFIX.items()
 }
+_city_name_canonical_lower = {city.lower(): city for city in CITY_NAME_TO_PREFIX}
 
 
-def _resolve_city_prefix(city: str) -> str | None:
+def _resolve_city(city: str) -> tuple[str, str] | None:
     normalized = city.strip()
     if not normalized:
         return None
 
     if len(normalized) == 3 and normalized.isalpha():
-        return normalized.upper()
+        prefix = normalized.upper()
+        city_name = CITY_PREFIX_TO_NAME.get(prefix)
+        if city_name is None:
+            return None
+        return prefix, city_name
 
-    return _city_name_to_prefix_lower.get(normalized.lower())
+    city_name = _city_name_canonical_lower.get(normalized.lower())
+    if city_name is None:
+        return None
+    prefix = _city_name_to_prefix_lower.get(city_name.lower())
+    if prefix is None:
+        return None
+    return prefix, city_name
 
 
 @router.get("/downloads/bus.db")
@@ -200,41 +212,133 @@ def search_city_routes(
     query: str = Query(default="", max_length=120),
     limit: int = Query(default=80, ge=1, le=200),
 ) -> list[dict]:
-    prefix = _resolve_city_prefix(city)
-    if prefix is None:
+    resolved_city = _resolve_city(city)
+    if resolved_city is None:
         raise HTTPException(status_code=404, detail=f"City {city} was not found.")
+    prefix, city_name = resolved_city
 
     normalized_query = query.strip()
     name_clause = ""
+    fallback_name_clause = ""
     args: list[object] = [prefix]
+    fallback_args: list[object] = [prefix]
     if normalized_query:
-        name_clause = " AND (routes.name LIKE ? OR paths.name LIKE ?)"
+        name_clause = """
+            AND (
+                routes.name LIKE ?
+                OR routes.path_name LIKE ?
+                OR routes.routeid LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM paths p
+                    WHERE p.routeid = routes.routeid
+                      AND p.name LIKE ?
+                )
+            )
+        """
+        fallback_name_clause = """
+            AND (
+                routes.name LIKE ?
+                OR routes.routeid LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM paths p
+                    WHERE p.routeid = routes.routeid
+                      AND p.name LIKE ?
+                )
+            )
+        """
         wildcard = f"%{normalized_query}%"
-        args.extend([wildcard, wildcard])
+        args.extend([wildcard, wildcard, wildcard, wildcard])
+        fallback_args.extend([wildcard, wildcard, wildcard])
 
     args.append(limit)
+    fallback_args.append(limit)
 
     settings = request.app.state.settings
-    with get_connection(settings.db_path) as connection:
-        rows = connection.execute(
-            f"""
-            SELECT
-                routes.routeid AS routeid,
-                routes.name AS route_name,
-                routes.name_en AS route_name_en,
-                paths.pathid AS pathid,
-                paths.name AS path_name,
-                paths.name_en AS path_name_en,
-                SUBSTR(routes.routeid, 1, 3) AS city_code
-            FROM routes
-            JOIN paths ON paths.routeid = routes.routeid
-            WHERE SUBSTR(routes.routeid, 1, 3) = ?
-            {name_clause}
-            ORDER BY routes.routeid ASC, paths.pathid ASC
-            LIMIT ?
-            """,
-            tuple(args),
-        ).fetchall()
+    city_db_path = settings.city_db_path(city_name)
+    if not city_db_path.exists():
+        raise HTTPException(status_code=404, detail=f"City database {city_name}.db was not found.")
+
+    with get_connection(city_db_path) as connection:
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    routes.routeid AS routeid,
+                    routes.name AS route_name,
+                    routes.name_en AS route_name_en,
+                    routes.path_name AS path_name,
+                    routes.path_name_en AS path_name_en,
+                    COALESCE(
+                        (
+                            SELECT p.pathid
+                            FROM paths p
+                            WHERE p.routeid = routes.routeid
+                            ORDER BY p.pathid ASC
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS pathid,
+                    routes.city_code AS city_code
+                FROM routes
+                WHERE routes.city_code = ?
+                {name_clause}
+                ORDER BY routes.routeid ASC
+                LIMIT ?
+                """,
+                tuple(args),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "no such column" not in message or "path_name" not in message:
+                raise
+
+            rows = connection.execute(
+                f"""
+                SELECT
+                    routes.routeid AS routeid,
+                    routes.name AS route_name,
+                    routes.name_en AS route_name_en,
+                    COALESCE(
+                        (
+                            SELECT p.name
+                            FROM paths p
+                            WHERE p.routeid = routes.routeid
+                            ORDER BY p.pathid ASC
+                            LIMIT 1
+                        ),
+                        ''
+                    ) AS path_name,
+                    COALESCE(
+                        (
+                            SELECT p.name_en
+                            FROM paths p
+                            WHERE p.routeid = routes.routeid
+                            ORDER BY p.pathid ASC
+                            LIMIT 1
+                        ),
+                        ''
+                    ) AS path_name_en,
+                    COALESCE(
+                        (
+                            SELECT p.pathid
+                            FROM paths p
+                            WHERE p.routeid = routes.routeid
+                            ORDER BY p.pathid ASC
+                            LIMIT 1
+                        ),
+                        0
+                    ) AS pathid,
+                    routes.city_code AS city_code
+                FROM routes
+                WHERE routes.city_code = ?
+                {fallback_name_clause}
+                ORDER BY routes.routeid ASC
+                LIMIT ?
+                """,
+                tuple(fallback_args),
+            ).fetchall()
 
     return [
         {
