@@ -72,11 +72,10 @@ def _build_message(item: dict[str, Any]) -> str:
         scheduled_time = (item.get("ScheduledTime") or "").strip()
         if scheduled_time:
             return scheduled_time
-        return ""
-        # next_bus_time = _to_hhmm(item.get("NextBusTime"))
-        # if next_bus_time:
-        #     return next_bus_time
-        # return STOP_STATUS_MESSAGES[1]
+        next_bus_time = _to_hhmm(item.get("NextBusTime"))
+        if next_bus_time:
+            return next_bus_time
+        return STOP_STATUS_MESSAGES[1]
 
     if stop_status in {2, 3, 4}:
         return STOP_STATUS_MESSAGES[stop_status]
@@ -86,7 +85,8 @@ def _build_message(item: dict[str, Any]) -> str:
         estimate_time = int(estimate_time)
         if estimate_time <= 30:
             return "進站中"
-        return f"{max(1, math.ceil(estimate_time / 60))} \u5206"
+        # return f"{max(1, math.ceil(estimate_time / 60))} \u5206"
+        return ""
 
     if item.get("IsLastBus"):
         return "\u672b\u73ed\u8eca"
