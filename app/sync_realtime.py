@@ -83,8 +83,8 @@ def _build_message(item: dict[str, Any]) -> str:
     estimate_time = item.get("EstimateTime")
     if estimate_time is not None:
         estimate_time = int(estimate_time)
-        if estimate_time <= 30:
-            return "進站中"
+        # if estimate_time <= 30:
+        #     return "進站中"
         # return f"{max(1, math.ceil(estimate_time / 60))} \u5206"
         return ""
 
