@@ -106,6 +106,17 @@ Example:
 curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime
 ```
 
+`/api/v1/routes/{routeid}/realtime` stop payload includes:
+
+- `eta`: nearest ETA for the stop (backward-compatible)
+- `message`: nearest ETA text/status (backward-compatible)
+- `buses`: arriving bus IDs for quick UI usage
+- `etas`: list of upcoming estimates for this stop, each item has:
+  - `plate`: bus plate if available
+  - `eta`: ETA in seconds (nullable)
+  - `message`: human-readable status text
+  - `is_arriving`: whether this estimate is marked as arriving
+
 Stops example:
 
 ```bash

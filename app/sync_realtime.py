@@ -106,6 +106,117 @@ def _to_int_or_none(value: Any) -> int | None:
         return None
 
 
+def _normalize_plate(value: Any) -> str | None:
+    if value is None:
+        return None
+    plate = str(value).strip()
+    if not plate or plate == "-1":
+        return None
+    return plate
+
+
+def _build_eta_text(eta: int | None, stop_status: int | None) -> str:
+    if stop_status in STOP_STATUS_MESSAGES:
+        return STOP_STATUS_MESSAGES[stop_status]
+    if eta is None:
+        return ""
+    if eta <= 30:
+        return "進站中"
+    return f"{max(1, math.ceil(eta / 60))} 分"
+
+
+def _append_stop_eta(
+    stop_bucket: dict[str, Any],
+    *,
+    plate: str | None,
+    eta: int | None,
+    message: str,
+    is_arriving: bool,
+) -> None:
+    if plate is None and eta is None and not message:
+        return
+    stop_bucket.setdefault("etas", []).append(
+        {
+            "plate": plate,
+            "eta": eta,
+            "message": message,
+            "is_arriving": is_arriving,
+        }
+    )
+
+
+def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
+    raw_etas = stop_bucket.get("etas") or []
+    if not isinstance(raw_etas, list) or not raw_etas:
+        stop_bucket["etas"] = []
+        return
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for entry in raw_etas:
+        if not isinstance(entry, dict):
+            continue
+
+        plate = _normalize_plate(entry.get("plate"))
+        eta = _to_int_or_none(entry.get("eta"))
+        message = str(entry.get("message") or "").strip()
+        is_arriving = bool(entry.get("is_arriving"))
+        if plate is None and eta is None and not message:
+            continue
+
+        key = plate or f"anon:{eta}:{message}"
+        candidate = {
+            "plate": plate,
+            "eta": eta,
+            "message": message,
+            "is_arriving": is_arriving,
+        }
+        current = deduped.get(key)
+        if current is None:
+            deduped[key] = candidate
+            continue
+
+        current_score = (
+            0 if current.get("is_arriving") else 1,
+            current.get("eta") if current.get("eta") is not None else 10**9,
+        )
+        candidate_score = (
+            0 if candidate.get("is_arriving") else 1,
+            candidate.get("eta") if candidate.get("eta") is not None else 10**9,
+        )
+        if candidate_score < current_score:
+            deduped[key] = candidate
+
+    stop_bucket["etas"] = sorted(
+        deduped.values(),
+        key=lambda entry: (
+            0 if entry.get("is_arriving") else 1,
+            entry.get("eta") if entry.get("eta") is not None else 10**9,
+            entry.get("plate") or "",
+        ),
+    )
+
+    if stop_bucket.get("eta") is None:
+        first_eta = next(
+            (
+                entry.get("eta")
+                for entry in stop_bucket["etas"]
+                if entry.get("eta") is not None
+            ),
+            None,
+        )
+        stop_bucket["eta"] = first_eta
+    if not stop_bucket.get("message"):
+        first_message = next(
+            (
+                str(entry.get("message") or "").strip()
+                for entry in stop_bucket["etas"]
+                if str(entry.get("message") or "").strip()
+            ),
+            "",
+        )
+        stop_bucket["message"] = first_message
+
+
 def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: str) -> list[PlateObservation]:
     observations: list[PlateObservation] = []
 
@@ -231,18 +342,44 @@ class RealtimeService:
                     "message": "",
                     # "time": updated_at,
                     "buses": [],
+                    "etas": [],
                 },
             )
 
-            estimate_time = item.get("EstimateTime")
+            estimate_time = _to_int_or_none(item.get("EstimateTime"))
+            message = _build_message(item)
             if estimate_time is not None:
-                estimate_time = int(estimate_time)
                 if stop_bucket["eta"] is None or estimate_time < stop_bucket["eta"]:
                     stop_bucket["eta"] = estimate_time
-                    stop_bucket["message"] = _build_message(item)
+                    stop_bucket["message"] = message
 
             if not stop_bucket["message"]:
-                stop_bucket["message"] = _build_message(item)
+                stop_bucket["message"] = message
+
+            top_plate = _normalize_plate(item.get("PlateNumb"))
+            top_is_arriving = item.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
+            _append_stop_eta(
+                stop_bucket,
+                plate=top_plate,
+                eta=estimate_time,
+                message=message,
+                is_arriving=top_is_arriving,
+            )
+
+            for estimate in item.get("Estimates") or []:
+                estimate_plate = _normalize_plate(estimate.get("PlateNumb"))
+                estimate_eta = _to_int_or_none(estimate.get("EstimateTime"))
+                estimate_status = _to_int_or_none(estimate.get("StopStatus"))
+                estimate_is_arriving = (
+                    estimate.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
+                )
+                _append_stop_eta(
+                    stop_bucket,
+                    plate=estimate_plate,
+                    eta=estimate_eta,
+                    message=_build_eta_text(estimate_eta, estimate_status),
+                    is_arriving=estimate_is_arriving,
+                )
 
             stop_time = (
                 _to_unix_seconds(item.get("UpdateTime"))
@@ -282,6 +419,10 @@ class RealtimeService:
         response_paths = []
         seen_pathids = set(paths)
         seen_pathids.update(grouped)
+
+        for path_bucket in grouped.values():
+            for stop_bucket in path_bucket.values():
+                _finalize_stop_eta_list(stop_bucket)
 
         for pathid in sorted(seen_pathids):
             path_meta = paths.get(pathid)
