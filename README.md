@@ -94,6 +94,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ## Endpoints
 
 - `GET /downloads/bus.db`
+- `GET /downloads/{City}.db` (for example: `Taipei`, `NewTaipei`, `Taichung`)
 - `GET /api/v1/routes/{routeid}/realtime`
 - `GET /api/v1/routes/{routeid}/realtime/buses`
 - `GET /api/v1/routes/{routeid}/stops`

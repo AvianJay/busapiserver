@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import MutableMapping
 from datetime import datetime, timezone
+import re
 import threading
 import time
 
@@ -24,6 +25,7 @@ _rate_limit_lock = threading.Lock()
 _rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
 _buses_cache_lock = threading.Lock()
 _buses_cache: MutableMapping[str, tuple[float, list[dict]]] = {}
+_download_name_pattern = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 
 def _get_client_ip(request: Request) -> str:
@@ -148,6 +150,17 @@ def download_bus_db(request: Request) -> FileResponse:
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="bus.db does not exist yet.")
     return FileResponse(db_path, filename="bus.db")
+
+
+@router.get("/downloads/{name}.db")
+def download_city_db(name: str, request: Request) -> FileResponse:
+    if not _download_name_pattern.fullmatch(name):
+        raise HTTPException(status_code=404, detail="Invalid download database name.")
+
+    db_path = request.app.state.settings.download_db_path.parent / f"{name}.db"
+    if not db_path.exists():
+        raise HTTPException(status_code=404, detail=f"{name}.db does not exist yet.")
+    return FileResponse(db_path, filename=f"{name}.db")
 
 
 @router.get("/api/v1/routes/{routeid}/realtime")
