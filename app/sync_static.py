@@ -49,6 +49,8 @@ class StaticRoute:
     routeid: str
     name: str
     name_en: str | None
+    city_path_name: str | None = None
+    city_path_name_en: str | None = None
     paths: dict[int, StaticPath] = field(default_factory=dict)
 
 
@@ -65,9 +67,29 @@ def _name_text(value: dict | None) -> str | None:
     return zh or en
 
 
-def _path_name_from_subroute(subroute: dict | None) -> tuple[str, str | None]:
+def _optional_text(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
+
+
+def _name_from_keys(
+    item: dict | None,
+    object_key: str,
+    zh_key: str,
+    en_key: str,
+) -> tuple[str | None, str | None]:
+    if not item:
+        return None, None
+
+    object_zh, object_en = _name_parts(item.get(object_key))
+    zh = _optional_text(item.get(zh_key)) or object_zh
+    en = _optional_text(item.get(en_key)) or object_en
+    return zh, en
+
+
+def _headsign_from_subroute(subroute: dict | None) -> tuple[str | None, str | None]:
     if not subroute:
-        return "Unknown", None
+        return None, None
 
     headsign = (subroute.get("HeadSign") or subroute.get("Headsign") or "").strip()
     headsign_en = (
@@ -76,26 +98,80 @@ def _path_name_from_subroute(subroute: dict | None) -> tuple[str, str | None]:
         or subroute.get("HeadSignEN")
         or ""
     ).strip()
-    if headsign or headsign_en:
-        return headsign or headsign_en, headsign_en or None
 
-    destination = (
-        _name_text(subroute.get("DestinationStopName"))
-        or (subroute.get("DestinationStopNameZh") or "").strip()
-        or (subroute.get("DestinationStopNameEn") or "").strip()
+    return headsign or None, headsign_en or None
+
+
+def _terminal_name_from_route(route: dict | None, direction: int) -> tuple[str | None, str | None]:
+    if not route:
+        return None, None
+
+    departure_zh, departure_en = _name_from_keys(
+        route,
+        "DepartureStopName",
+        "DepartureStopNameZh",
+        "DepartureStopNameEn",
     )
+    destination_zh, destination_en = _name_from_keys(
+        route,
+        "DestinationStopName",
+        "DestinationStopNameZh",
+        "DestinationStopNameEn",
+    )
+
+    if direction == 0:
+        return destination_zh or destination_en, destination_en
+    if direction == 1:
+        return departure_zh or departure_en, departure_en
+    return None, None
+
+
+def _path_name_from_route_and_subroute(
+    route: dict | None,
+    subroute: dict | None,
+    direction: int,
+) -> tuple[str, str | None]:
+    terminal_name, terminal_name_en = _terminal_name_from_route(route, direction)
+    if terminal_name or terminal_name_en:
+        return terminal_name or terminal_name_en or "Unknown", terminal_name_en
+
+    headsign, headsign_en = _headsign_from_subroute(subroute)
+    if headsign or headsign_en:
+        return headsign or headsign_en or "Unknown", headsign_en
+
+    if not subroute:
+        return "Unknown", None
+
+    destination_zh, destination_en = _name_from_keys(
+        subroute,
+        "DestinationStopName",
+        "DestinationStopNameZh",
+        "DestinationStopNameEn",
+    )
+    destination = destination_zh or destination_en
     if destination:
-        destination_en = (
-            (_name_parts(subroute.get("DestinationStopName"))[1] or "")
-            or (subroute.get("DestinationStopNameEn") or "").strip()
-        )
-        return f"\u5f80{destination}", (f"To {destination_en}" if destination_en else None)
+        if destination_zh:
+            return f"\u5f80{destination_zh}", (f"To {destination_en}" if destination_en else None)
+        return destination, destination_en
 
     name_zh, name_en = _name_parts(subroute.get("SubRouteName"))
     return name_zh or name_en or subroute.get("SubRouteUID") or "Unknown", name_en
 
 
+def _maybe_set_city_path_name(route: StaticRoute, subroute: dict | None, direction: int) -> None:
+    headsign, headsign_en = _headsign_from_subroute(subroute)
+    if not headsign and not headsign_en:
+        return
+
+    if direction == 0 or route.city_path_name is None:
+        route.city_path_name = headsign or headsign_en
+        route.city_path_name_en = headsign_en
+
+
 def _pick_city_route_path_name(route: StaticRoute) -> tuple[str, str | None]:
+    if route.city_path_name or route.city_path_name_en:
+        return route.city_path_name or route.city_path_name_en or route.name, route.city_path_name_en
+
     if not route.paths:
         return route.name, route.name_en
 
@@ -277,7 +353,12 @@ def _persist_fetch_state(
     )
 
 
-def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> None:
+def sync_static(
+    settings: Settings,
+    cities: tuple[str, ...] | None = None,
+    *,
+    force: bool = False,
+) -> None:
     settings.require_tdx_credentials()
     init_db(settings.db_path)
 
@@ -296,15 +377,21 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
 
                 routes_response = client.fetch_paginated_items_conditional(
                     f"/v2/Bus/Route/City/{city}",
-                    if_modified_since=None if routes_state is None else routes_state.get("last_modified"),
+                    if_modified_since=None
+                    if force or routes_state is None
+                    else routes_state.get("last_modified"),
                 )
                 stops_response = client.fetch_paginated_items_conditional(
                     f"/v2/Bus/StopOfRoute/City/{city}",
-                    if_modified_since=None if stops_state is None else stops_state.get("last_modified"),
+                    if_modified_since=None
+                    if force or stops_state is None
+                    else stops_state.get("last_modified"),
                 )
                 shapes_response = client.fetch_paginated_items_conditional(
                     f"/v2/Bus/Shape/City/{city}",
-                    if_modified_since=None if shapes_state is None else shapes_state.get("last_modified"),
+                    if_modified_since=None
+                    if force or shapes_state is None
+                    else shapes_state.get("last_modified"),
                 )
 
                 checked_at = int(time.time())
@@ -345,7 +432,7 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                 stop_of_route_items = stops_response.payload or []
                 shapes = shapes_response.payload or []
 
-                subroute_lookup = {}
+                subroute_lookup: dict[tuple[str, int], tuple[dict | None, dict | None]] = {}
                 static_routes: dict[str, StaticRoute] = {}
 
                 for route in routes:
@@ -368,12 +455,13 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                         )
 
                         pathid = int(item.get("Direction") or 0)
-                        path_name, path_name_en = _path_name_from_subroute(item)
+                        path_name, path_name_en = _path_name_from_route_and_subroute(route, item, pathid)
                         static_route.paths.setdefault(
                             pathid,
                             StaticPath(pathid=pathid, name=path_name, name_en=path_name_en),
                         )
-                        subroute_lookup[(routeid, pathid)] = item
+                        _maybe_set_city_path_name(static_route, item, pathid)
+                        subroute_lookup[(routeid, pathid)] = (route, item)
 
                 for item in stop_of_route_items:
                     routeid = item.get("SubRouteUID") or item.get("RouteUID")
@@ -386,8 +474,8 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                         StaticRoute(routeid=routeid, name=routeid, name_en=None),
                     )
 
-                    subroute = subroute_lookup.get((routeid, pathid))
-                    path_name, path_name_en = _path_name_from_subroute(subroute)
+                    route_item, subroute = subroute_lookup.get((routeid, pathid), (None, None))
+                    path_name, path_name_en = _path_name_from_route_and_subroute(route_item, subroute, pathid)
                     path = static_route.paths.setdefault(
                         pathid,
                         StaticPath(pathid=pathid, name=path_name, name_en=path_name_en),
@@ -424,8 +512,8 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
                         routeid,
                         StaticRoute(routeid=routeid, name=routeid, name_en=None),
                     )
-                    subroute = subroute_lookup.get((routeid, pathid))
-                    path_name, path_name_en = _path_name_from_subroute(subroute)
+                    route_item, subroute = subroute_lookup.get((routeid, pathid), (None, None))
+                    path_name, path_name_en = _path_name_from_route_and_subroute(route_item, subroute, pathid)
                     path = static_route.paths.setdefault(
                         pathid,
                         StaticPath(pathid=pathid, name=path_name, name_en=path_name_en),
@@ -468,6 +556,7 @@ def sync_static(settings: Settings, cities: tuple[str, ...] | None = None) -> No
             settings.db_path,
             download_db_path=settings.download_db_path,
             city_db_paths={city: settings.city_db_path(city) for city in effective_cities},
+            force=force,
         )
         print(f"[sync_static] built download db at {settings.download_db_path}")
     finally:
@@ -481,6 +570,11 @@ def main() -> None:
         "--cities",
         help="Comma-separated TDX city names. Defaults to TDX_CITIES or all supported CityBus cities/counties.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force full re-fetch without If-Modified-Since and force database version increment.",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -490,7 +584,7 @@ def main() -> None:
             item.strip() for item in args.cities.split(",") if item.strip()
         ) or settings.tdx_cities
 
-    sync_static(settings, cities=cities)
+    sync_static(settings, cities=cities, force=args.force)
 
 
 if __name__ == "__main__":

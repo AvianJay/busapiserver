@@ -407,6 +407,8 @@ def _upsert_database_version(
     name: str,
     content_hash: str,
     now: int,
+    *,
+    force: bool = False,
 ) -> dict[str, int | str | bool]:
     row = connection.execute(
         "SELECT name, version, content_hash, updated_at FROM database_versions WHERE name = ?",
@@ -425,7 +427,7 @@ def _upsert_database_version(
 
     current_version = int(row["version"])
     current_hash = row["content_hash"]
-    if current_hash == content_hash:
+    if current_hash == content_hash and not force:
         return {
             "name": name,
             "version": current_version,
@@ -450,6 +452,7 @@ def refresh_database_versions(
     *,
     download_db_path: str | Path,
     city_db_paths: dict[str, Path] | None = None,
+    force: bool = False,
 ) -> list[dict[str, int | str | bool]]:
     city_db_paths = city_db_paths or {}
 
@@ -472,7 +475,7 @@ def refresh_database_versions(
     now = int(time.time())
     with get_connection(main_db_path) as connection:
         results = [
-            _upsert_database_version(connection, name, content_hash, now)
+            _upsert_database_version(connection, name, content_hash, now, force=force)
             for name, content_hash in hashes.items()
         ]
         connection.commit()

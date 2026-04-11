@@ -77,6 +77,12 @@ Optional: override the cities for one run:
 python -m app.sync_static --cities Taipei,NewTaipei
 ```
 
+Optional: force full refresh and force database version increment:
+
+```bash
+python -m app.sync_static --cities Taichung --force
+```
+
 Fetch one realtime snapshot from TDX and print it as JSON:
 
 ```bash
@@ -165,6 +171,7 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 - TDX authentication uses `client_credentials`.
 - Access tokens are cached in memory and reused until near expiration.
 - Static sync uses TDX `Last-Modified` / `If-Modified-Since` for conditional requests.
+- `--force` disables `If-Modified-Since` headers for that run and forces database version increments.
 - Static sync metadata is persisted in `tdx_fetch_state` (resource key, last-modified, status, check/update times).
 - If all static resources (`Route`, `StopOfRoute`, `Shape`) return `304`, that city is skipped.
 - Static sync replaces old route data atomically per route.
