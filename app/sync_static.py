@@ -70,8 +70,14 @@ def _path_name_from_subroute(subroute: dict | None) -> tuple[str, str | None]:
         return "Unknown", None
 
     headsign = (subroute.get("HeadSign") or subroute.get("Headsign") or "").strip()
-    if headsign:
-        return headsign, None
+    headsign_en = (
+        subroute.get("HeadSignEn")
+        or subroute.get("HeadsignEn")
+        or subroute.get("HeadSignEN")
+        or ""
+    ).strip()
+    if headsign or headsign_en:
+        return headsign or headsign_en, headsign_en or None
 
     destination = (
         _name_text(subroute.get("DestinationStopName"))
@@ -79,10 +85,25 @@ def _path_name_from_subroute(subroute: dict | None) -> tuple[str, str | None]:
         or (subroute.get("DestinationStopNameEn") or "").strip()
     )
     if destination:
-        return f"\u5f80{destination}", None
+        destination_en = (
+            (_name_parts(subroute.get("DestinationStopName"))[1] or "")
+            or (subroute.get("DestinationStopNameEn") or "").strip()
+        )
+        return f"\u5f80{destination}", (f"To {destination_en}" if destination_en else None)
 
     name_zh, name_en = _name_parts(subroute.get("SubRouteName"))
-    return name_zh or subroute.get("SubRouteUID") or "Unknown", name_en
+    return name_zh or name_en or subroute.get("SubRouteUID") or "Unknown", name_en
+
+
+def _pick_city_route_path_name(route: StaticRoute) -> tuple[str, str | None]:
+    if not route.paths:
+        return route.name, route.name_en
+
+    preferred = route.paths.get(0)
+    if preferred is None:
+        preferred = min(route.paths.values(), key=lambda item: item.pathid)
+
+    return preferred.name or route.name, preferred.name_en
 
 
 def _parse_geometry(geometry: str | None) -> list[tuple[float, float]]:
@@ -148,6 +169,7 @@ def _replace_main_route(connection, route: StaticRoute) -> None:
 
 def _replace_city_route(connection, route: StaticRoute) -> None:
     city_code = route.routeid[:3].upper()
+    route_path_name, route_path_name_en = _pick_city_route_path_name(route)
     connection.execute(
         """
         INSERT OR REPLACE INTO routes
@@ -159,8 +181,8 @@ def _replace_city_route(connection, route: StaticRoute) -> None:
             route.name,
             route.name_en,
             city_code,
-            route.name,
-            route.name_en,
+            route_path_name,
+            route_path_name_en,
         ),
     )
     connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
@@ -198,10 +220,20 @@ def _city_temp_db_path(city_db_path: Path) -> Path:
     return city_db_path.with_suffix(f"{city_db_path.suffix}.tmp")
 
 
-def _should_use_terminal_stop_name(path_name: str | None) -> bool:
+def _should_use_terminal_stop_name(path_name: str | None, route_name: str | None) -> bool:
     if not path_name:
         return True
-    return any(separator in path_name for separator in (" - ", "－", "|", "→", "<->", "↔"))
+
+    normalized_path_name = path_name.strip().lower()
+    if normalized_path_name in {"unknown", "path 0", "path 1"}:
+        return True
+
+    normalized_route_name = (route_name or "").strip().lower()
+    if normalized_route_name and normalized_path_name == normalized_route_name:
+        return True
+
+    # Keep subroute headsign text intact (e.g. "A - B - A").
+    return False
 
 
 def _normalize_path_names_from_stops(static_routes: dict[str, StaticRoute]) -> None:
@@ -209,7 +241,7 @@ def _normalize_path_names_from_stops(static_routes: dict[str, StaticRoute]) -> N
         for path in route.paths.values():
             if not path.stops:
                 continue
-            if not _should_use_terminal_stop_name(path.name):
+            if not _should_use_terminal_stop_name(path.name, route.name):
                 continue
 
             terminal_stop = path.stops[-1]
