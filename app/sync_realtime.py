@@ -194,34 +194,34 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
 def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: str) -> list[PlateObservation]:
     observations: list[PlateObservation] = []
 
-    top_plate = (item.get("PlateNumb") or "").strip()
-    top_is_arriving = item.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
-    if top_plate and top_plate != "-1" and top_is_arriving:
+    top_plate = _normalize_plate(item.get("PlateNumb"))
+    top_eta = _to_int_or_none(item.get("EstimateTime"))
+    top_is_arriving = _to_int_or_none(item.get("VehicleStopStatus")) == ARRIVING_VEHICLE_STOP_STATUS
+    if top_plate is not None and top_eta is not None:
         observations.append(
             PlateObservation(
                 plate=top_plate,
                 pathid=pathid,
                 stopid=stopid,
-                eta=_to_int_or_none(item.get("EstimateTime")),
+                eta=top_eta,
                 is_arriving=top_is_arriving,
             )
         )
 
     for estimate in item.get("Estimates") or []:
-        estimate_plate = (estimate.get("PlateNumb") or "").strip()
-        if not estimate_plate or estimate_plate == "-1":
+        estimate_plate = _normalize_plate(estimate.get("PlateNumb"))
+        estimate_eta = _to_int_or_none(estimate.get("EstimateTime"))
+        if estimate_plate is None or estimate_eta is None:
             continue
-        estimate_is_arriving = estimate.get("VehicleStopStatus") == ARRIVING_VEHICLE_STOP_STATUS
-        # N1 Estimates is often a list of multiple upcoming buses for a stop.
-        # Only trust estimate plates when API explicitly marks "arriving".
-        if not estimate_is_arriving:
-            continue
+        estimate_is_arriving = (
+            _to_int_or_none(estimate.get("VehicleStopStatus")) == ARRIVING_VEHICLE_STOP_STATUS
+        )
         observations.append(
             PlateObservation(
                 plate=estimate_plate,
                 pathid=pathid,
                 stopid=stopid,
-                eta=_to_int_or_none(estimate.get("EstimateTime")),
+                eta=estimate_eta,
                 is_arriving=estimate_is_arriving,
             )
         )

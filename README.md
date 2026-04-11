@@ -112,7 +112,7 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime
 
 - `eta`: nearest ETA for the stop (backward-compatible)
 - `message`: stop status text (kept for backward compatibility; empty when `eta` has seconds)
-- `buses`: arriving bus IDs for quick UI usage
+- `buses`: bus plates whose best estimated stop is this station (one stop per plate)
 - `etas`: list of upcoming estimates with valid ETA for this stop, each item has:
   - `plate`: bus plate if available
   - `eta`: ETA in seconds
