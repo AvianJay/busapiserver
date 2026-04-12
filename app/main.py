@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import threading
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.routes import router
 from app.config import get_settings
@@ -96,4 +97,5 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bus API Server", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 app.include_router(router)
