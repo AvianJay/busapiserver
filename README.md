@@ -68,8 +68,8 @@ By default this syncs all supported `CityBus` cities/counties. If you only want 
 After static sync finishes:
 
 - the primary `./bus.db` remains the full database
-- `./downloads/bus.db` contains a route catalog (`routes`) with `city_code` and path metadata (`pathid`, `path_name`)
-- `./downloads/{City}.db` contains that city's `routes`, `paths`, and `stops` (no `path_points`)
+- `./downloads/bus.db` contains the route catalog in `routes` plus per-direction metadata in `paths`
+- `./downloads/{City}.db` contains that city's `stops` only (no `routes`, `paths`, or `path_points`)
 
 Optional: override the cities for one run:
 
@@ -182,6 +182,6 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 - Supported database version names: `main`, `download`, and city names like `Taichung`.
 - the primary `bus.db` remains the full internal database
 - `GET /downloads/bus.db` serves the stripped database with only `routes` and `paths`
-- `GET /downloads/bus.db` now stores route catalog rows with `city_code` and path metadata.
-- `downloads/{City}.db` stores `routes`, `paths`, and `stops` for that city; path points are API-only.
+- `GET /downloads/bus.db` serves the stripped catalog database with `routes` and `paths`.
+- `downloads/{City}.db` stores `stops` for that city only; route/path metadata stays in `downloads/bus.db`.
 - Realtime snapshots are cached in memory inside the server process.

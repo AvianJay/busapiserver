@@ -76,28 +76,10 @@ DOWNLOAD_SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS routes (
-    routeid     TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    name_en     TEXT,
-    city_code   TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    path_name   TEXT NOT NULL,
-    path_name_en TEXT,
-    PRIMARY KEY (routeid, pathid)
-);
-
-CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
-CREATE INDEX IF NOT EXISTS idx_routes_city_code ON routes(city_code);
-"""
-
-CITY_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS routes (
     routeid     TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     name_en     TEXT,
-    city_code   TEXT NOT NULL,
-    path_name   TEXT NOT NULL,
-    path_name_en TEXT
+    city_code   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS paths (
@@ -105,9 +87,16 @@ CREATE TABLE IF NOT EXISTS paths (
     pathid      INTEGER NOT NULL,
     name        TEXT NOT NULL,
     name_en     TEXT,
-    PRIMARY KEY (routeid, pathid)
+    PRIMARY KEY (routeid, pathid),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
+CREATE INDEX IF NOT EXISTS idx_routes_city_code ON routes(city_code);
+CREATE INDEX IF NOT EXISTS idx_paths_routeid ON paths(routeid);
+"""
+
+CITY_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS stops (
     routeid     TEXT NOT NULL,
     pathid      INTEGER NOT NULL,
@@ -120,9 +109,6 @@ CREATE TABLE IF NOT EXISTS stops (
     PRIMARY KEY (routeid, pathid, seq)
 );
 
-CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
-CREATE INDEX IF NOT EXISTS idx_routes_city_code ON routes(city_code);
-CREATE INDEX IF NOT EXISTS idx_paths_routeid ON paths(routeid);
 CREATE INDEX IF NOT EXISTS idx_stops_routeid ON stops(routeid);
 CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
 """
@@ -180,20 +166,15 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                 routes.routeid AS routeid,
                 routes.name AS name,
                 routes.name_en AS name_en,
-                SUBSTR(routes.routeid, 1, 3) AS city_code,
-                paths.pathid AS pathid,
-                paths.name AS path_name,
-                paths.name_en AS path_name_en
+                SUBSTR(routes.routeid, 1, 3) AS city_code
             FROM routes
-            JOIN paths ON paths.routeid = routes.routeid
-            ORDER BY routes.routeid, paths.pathid
+            ORDER BY routes.routeid
             """
         ).fetchall()
         target_connection.executemany(
             """
-            INSERT INTO routes
-                (routeid, name, name_en, city_code, pathid, path_name, path_name_en)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO routes (routeid, name, name_en, city_code)
+            VALUES (?, ?, ?, ?)
             """,
             [
                 (
@@ -201,11 +182,30 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                     row["name"],
                     row["name_en"],
                     row["city_code"],
-                    row["pathid"],
-                    row["path_name"],
-                    row["path_name_en"],
                 )
                 for row in routes
+            ],
+        )
+        paths = source_connection.execute(
+            """
+            SELECT routeid, pathid, name, name_en
+            FROM paths
+            ORDER BY routeid, pathid
+            """
+        ).fetchall()
+        target_connection.executemany(
+            """
+            INSERT INTO paths (routeid, pathid, name, name_en)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["name"],
+                    row["name_en"],
+                )
+                for row in paths
             ],
         )
         target_connection.commit()
@@ -221,9 +221,7 @@ def delete_main_routes_by_prefix(connection: sqlite3.Connection, prefix: str) ->
 
 
 def clear_city_db(connection: sqlite3.Connection) -> None:
-    connection.execute("DELETE FROM paths")
     connection.execute("DELETE FROM stops")
-    connection.execute("DELETE FROM routes")
 
 
 def route_exists(connection: sqlite3.Connection, routeid: str) -> bool:
@@ -458,10 +456,10 @@ def refresh_database_versions(
 
     entries: list[tuple[str, Path, tuple[str, ...]]] = [
         ("main", Path(main_db_path), ("routes", "paths", "stops", "path_points")),
-        ("download", Path(download_db_path), ("routes",)),
+        ("download", Path(download_db_path), ("routes", "paths")),
     ]
     for city_name, city_path in sorted(city_db_paths.items()):
-        entries.append((city_name, Path(city_path), ("routes", "paths", "stops")))
+        entries.append((city_name, Path(city_path), ("stops",)))
 
     hashes: dict[str, str] = {}
     for name, db_path, tables in entries:

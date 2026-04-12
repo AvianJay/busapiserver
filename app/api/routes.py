@@ -4,7 +4,6 @@ from collections import deque
 from collections.abc import MutableMapping
 from datetime import datetime, timezone
 import re
-import sqlite3
 import threading
 import time
 
@@ -218,25 +217,10 @@ def search_city_routes(
     prefix, city_name = resolved_city
 
     normalized_query = query.strip()
-    name_clause = ""
-    fallback_name_clause = ""
-    args: list[object] = [prefix]
-    fallback_args: list[object] = [prefix]
+    where_clause = ""
+    query_args: list[object] = [prefix]
     if normalized_query:
-        name_clause = """
-            AND (
-                routes.name LIKE ?
-                OR routes.path_name LIKE ?
-                OR routes.routeid LIKE ?
-                OR EXISTS (
-                    SELECT 1
-                    FROM paths p
-                    WHERE p.routeid = routes.routeid
-                      AND p.name LIKE ?
-                )
-            )
-        """
-        fallback_name_clause = """
+        where_clause = """
             AND (
                 routes.name LIKE ?
                 OR routes.routeid LIKE ?
@@ -249,96 +233,63 @@ def search_city_routes(
             )
         """
         wildcard = f"%{normalized_query}%"
-        args.extend([wildcard, wildcard, wildcard, wildcard])
-        fallback_args.extend([wildcard, wildcard, wildcard])
+        query_args.extend([wildcard, wildcard, wildcard])
 
-    args.append(limit)
-    fallback_args.append(limit)
+    query_args.append(limit)
 
     settings = request.app.state.settings
-    city_db_path = settings.city_db_path(city_name)
-    if not city_db_path.exists():
-        raise HTTPException(status_code=404, detail=f"City database {city_name}.db was not found.")
-
-    with get_connection(city_db_path) as connection:
-        try:
-            rows = connection.execute(
-                f"""
-                SELECT
-                    routes.routeid AS routeid,
-                    routes.name AS route_name,
-                    routes.name_en AS route_name_en,
-                    routes.path_name AS path_name,
-                    routes.path_name_en AS path_name_en,
-                    COALESCE(
-                        (
-                            SELECT p.pathid
+    with get_connection(settings.db_path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                routes.routeid AS routeid,
+                routes.name AS route_name,
+                routes.name_en AS route_name_en,
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(path_name, ' / ')
+                        FROM (
+                            SELECT DISTINCT p.name AS path_name
                             FROM paths p
                             WHERE p.routeid = routes.routeid
+                              AND TRIM(COALESCE(p.name, '')) <> ''
                             ORDER BY p.pathid ASC
-                            LIMIT 1
-                        ),
-                        0
-                    ) AS pathid,
-                    routes.city_code AS city_code
-                FROM routes
-                WHERE routes.city_code = ?
-                {name_clause}
-                ORDER BY routes.routeid ASC
-                LIMIT ?
-                """,
-                tuple(args),
-            ).fetchall()
-        except sqlite3.OperationalError as exc:
-            message = str(exc).lower()
-            if "no such column" not in message or "path_name" not in message:
-                raise
-
-            rows = connection.execute(
-                f"""
-                SELECT
-                    routes.routeid AS routeid,
-                    routes.name AS route_name,
-                    routes.name_en AS route_name_en,
-                    COALESCE(
-                        (
-                            SELECT p.name
+                        )
+                    ),
+                    ''
+                ) AS path_name,
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(path_name_en, ' / ')
+                        FROM (
+                            SELECT DISTINCT p.name_en AS path_name_en
                             FROM paths p
                             WHERE p.routeid = routes.routeid
+                              AND TRIM(COALESCE(p.name_en, '')) <> ''
                             ORDER BY p.pathid ASC
-                            LIMIT 1
-                        ),
-                        ''
-                    ) AS path_name,
-                    COALESCE(
-                        (
-                            SELECT p.name_en
-                            FROM paths p
-                            WHERE p.routeid = routes.routeid
-                            ORDER BY p.pathid ASC
-                            LIMIT 1
-                        ),
-                        ''
-                    ) AS path_name_en,
-                    COALESCE(
-                        (
-                            SELECT p.pathid
-                            FROM paths p
-                            WHERE p.routeid = routes.routeid
-                            ORDER BY p.pathid ASC
-                            LIMIT 1
-                        ),
-                        0
-                    ) AS pathid,
-                    routes.city_code AS city_code
-                FROM routes
-                WHERE routes.city_code = ?
-                {fallback_name_clause}
-                ORDER BY routes.routeid ASC
-                LIMIT ?
-                """,
-                tuple(fallback_args),
-            ).fetchall()
+                        )
+                    ),
+                    ''
+                ) AS path_name_en,
+                COALESCE(
+                    (
+                        SELECT p.pathid
+                        FROM paths p
+                        WHERE p.routeid = routes.routeid
+                        ORDER BY p.pathid ASC
+                        LIMIT 1
+                    ),
+                    0
+                ) AS pathid,
+                SUBSTR(routes.routeid, 1, 3) AS city_code
+            FROM routes
+            WHERE routes.routeid LIKE ?
+            {where_clause}
+            ORDER BY routes.routeid ASC
+            LIMIT ?
+            """,
+            tuple(query_args),
+        ).fetchall()
 
     return [
         {

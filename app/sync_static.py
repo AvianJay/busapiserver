@@ -49,8 +49,6 @@ class StaticRoute:
     routeid: str
     name: str
     name_en: str | None
-    city_path_name: str | None = None
-    city_path_name_en: str | None = None
     paths: dict[int, StaticPath] = field(default_factory=dict)
 
 
@@ -158,30 +156,6 @@ def _path_name_from_route_and_subroute(
     return name_zh or name_en or subroute.get("SubRouteUID") or "Unknown", name_en
 
 
-def _maybe_set_city_path_name(route: StaticRoute, subroute: dict | None, direction: int) -> None:
-    headsign, headsign_en = _headsign_from_subroute(subroute)
-    if not headsign and not headsign_en:
-        return
-
-    if direction == 0 or route.city_path_name is None:
-        route.city_path_name = headsign or headsign_en
-        route.city_path_name_en = headsign_en
-
-
-def _pick_city_route_path_name(route: StaticRoute) -> tuple[str, str | None]:
-    if route.city_path_name or route.city_path_name_en:
-        return route.city_path_name or route.city_path_name_en or route.name, route.city_path_name_en
-
-    if not route.paths:
-        return route.name, route.name_en
-
-    preferred = route.paths.get(0)
-    if preferred is None:
-        preferred = min(route.paths.values(), key=lambda item: item.pathid)
-
-    return preferred.name or route.name, preferred.name_en
-
-
 def _parse_geometry(geometry: str | None) -> list[tuple[float, float]]:
     if not geometry:
         return []
@@ -244,34 +218,9 @@ def _replace_main_route(connection, route: StaticRoute) -> None:
 
 
 def _replace_city_route(connection, route: StaticRoute) -> None:
-    city_code = route.routeid[:3].upper()
-    route_path_name, route_path_name_en = _pick_city_route_path_name(route)
-    connection.execute(
-        """
-        INSERT OR REPLACE INTO routes
-        (routeid, name, name_en, city_code, path_name, path_name_en)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            route.routeid,
-            route.name,
-            route.name_en,
-            city_code,
-            route_path_name,
-            route_path_name_en,
-        ),
-    )
-    connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
     connection.execute("DELETE FROM stops WHERE routeid = ?", (route.routeid,))
 
     for path in sorted(route.paths.values(), key=lambda item: item.pathid):
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO paths (routeid, pathid, name, name_en)
-            VALUES (?, ?, ?, ?)
-            """,
-            (route.routeid, path.pathid, path.name, path.name_en),
-        )
         for stop in sorted(path.stops, key=lambda item: item.seq):
             connection.execute(
                 """
@@ -460,7 +409,6 @@ def sync_static(
                             pathid,
                             StaticPath(pathid=pathid, name=path_name, name_en=path_name_en),
                         )
-                        _maybe_set_city_path_name(static_route, item, pathid)
                         subroute_lookup[(routeid, pathid)] = (route, item)
 
                 for item in stop_of_route_items:
