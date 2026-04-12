@@ -68,7 +68,7 @@ By default this syncs all supported `CityBus` cities/counties. If you only want 
 After static sync finishes:
 
 - the primary `./bus.db` remains the full database
-- `./downloads/bus.db` contains the route catalog in `routes` plus per-direction metadata in `paths`
+- `./downloads/bus.db` contains the route catalog in `routes` with aggregated `path_name`, plus per-direction metadata in `paths`
 - `./downloads/{City}.db` contains that city's `stops` only (no `routes`, `paths`, or `path_points`)
 
 Optional: override the cities for one run:

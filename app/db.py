@@ -79,7 +79,9 @@ CREATE TABLE IF NOT EXISTS routes (
     routeid     TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     name_en     TEXT,
-    city_code   TEXT NOT NULL
+    city_code   TEXT NOT NULL,
+    path_name   TEXT,
+    path_name_en TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paths (
@@ -166,15 +168,41 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                 routes.routeid AS routeid,
                 routes.name AS name,
                 routes.name_en AS name_en,
-                SUBSTR(routes.routeid, 1, 3) AS city_code
+                SUBSTR(routes.routeid, 1, 3) AS city_code,
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(path_name, ' / ')
+                        FROM (
+                            SELECT DISTINCT p.name AS path_name
+                            FROM paths p
+                            WHERE p.routeid = routes.routeid
+                              AND TRIM(COALESCE(p.name, '')) <> ''
+                            ORDER BY p.pathid ASC
+                        )
+                    ),
+                    ''
+                ) AS path_name,
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(path_name_en, ' / ')
+                        FROM (
+                            SELECT DISTINCT p.name_en AS path_name_en
+                            FROM paths p
+                            WHERE p.routeid = routes.routeid
+                              AND TRIM(COALESCE(p.name_en, '')) <> ''
+                            ORDER BY p.pathid ASC
+                        )
+                    ),
+                    ''
+                ) AS path_name_en
             FROM routes
             ORDER BY routes.routeid
             """
         ).fetchall()
         target_connection.executemany(
             """
-            INSERT INTO routes (routeid, name, name_en, city_code)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO routes (routeid, name, name_en, city_code, path_name, path_name_en)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -182,6 +210,8 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                     row["name"],
                     row["name_en"],
                     row["city_code"],
+                    row["path_name"],
+                    row["path_name_en"],
                 )
                 for row in routes
             ],
