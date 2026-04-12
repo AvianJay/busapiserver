@@ -11,7 +11,10 @@ from typing import Any
 import requests
 
 from app.config import Settings
+from app.logging_utils import get_logger
 from app.tdx_auth import TDXTokenManager
+
+LOGGER = get_logger("tdx_client")
 
 
 @dataclass
@@ -105,18 +108,25 @@ class TDXClient:
 
             if response.status_code == 429 and attempt < self.settings.tdx_retry_attempts:
                 delay = self._retry_delay(response, attempt)
-                print(
-                    f"[tdx] 429 rate limited for {path}, retrying in {delay:.1f}s "
-                    f"(attempt {attempt}/{self.settings.tdx_retry_attempts})"
+                LOGGER.warning(
+                    "429 rate limited for %s, retrying in %.1fs (attempt %s/%s)",
+                    path,
+                    delay,
+                    attempt,
+                    self.settings.tdx_retry_attempts,
                 )
                 time.sleep(delay)
                 continue
 
             if response.status_code >= 500 and attempt < self.settings.tdx_retry_attempts:
                 delay = self._retry_delay(response, attempt)
-                print(
-                    f"[tdx] upstream {response.status_code} for {path}, retrying in {delay:.1f}s "
-                    f"(attempt {attempt}/{self.settings.tdx_retry_attempts})"
+                LOGGER.warning(
+                    "upstream %s for %s, retrying in %.1fs (attempt %s/%s)",
+                    response.status_code,
+                    path,
+                    delay,
+                    attempt,
+                    self.settings.tdx_retry_attempts,
                 )
                 time.sleep(delay)
                 continue

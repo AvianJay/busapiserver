@@ -18,6 +18,7 @@ from app.db import (
     load_tdx_fetch_state,
     save_tdx_fetch_state,
 )
+from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient, TDXJSONResponse
 
@@ -31,6 +32,7 @@ STOP_STATUS_MESSAGES = {
 
 ARRIVING_VEHICLE_STOP_STATUS = 1
 REALTIME_FETCH_STATE_RETENTION_SECONDS = 86400
+LOGGER = get_logger("sync_realtime")
 
 
 @dataclass
@@ -312,6 +314,11 @@ class RealtimeService:
             except Exception:
                 stale = self._get_cached(routeid, allow_expired=True)
                 if stale is not None:
+                    LOGGER.warning(
+                        "using stale realtime cache routeid=%s city=%s after refresh failure",
+                        routeid,
+                        city,
+                    )
                     self._set_cached(routeid, stale)
                     return stale
                 raise
@@ -362,10 +369,25 @@ class RealtimeService:
             connection.commit()
 
         if response.not_modified:
+            LOGGER.info(
+                "realtime batch not modified city=%s routes=%s requested_routeid=%s",
+                city,
+                len(effective_routeids),
+                requested_routeid,
+            )
             for routeid, snapshot in stale_snapshots.items():
                 if snapshot is not None:
                     self._set_cached(routeid, snapshot)
             return
+
+        LOGGER.info(
+            "realtime batch refreshed city=%s routes=%s requested_routeid=%s status=%s items=%s",
+            city,
+            len(effective_routeids),
+            requested_routeid,
+            response.status_code,
+            len(response.payload or []),
+        )
 
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
@@ -400,6 +422,7 @@ class RealtimeService:
         except Exception:
             stale = self._get_cached(routeid, allow_expired=True)
             if stale is not None:
+                LOGGER.warning("using stale realtime cache routeid=%s after single-route refresh failure", routeid)
                 self._set_cached(routeid, stale)
                 return stale
             raise
@@ -629,6 +652,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    setup_logging(settings.project_dir)
     settings.require_tdx_credentials()
     init_db(settings.db_path)
 
@@ -642,6 +666,7 @@ def main() -> None:
     finally:
         client.close()
         token_manager.close()
+        shutdown_logging()
 
 
 if __name__ == "__main__":

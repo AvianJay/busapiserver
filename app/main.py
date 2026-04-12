@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import threading
+import time
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -10,10 +11,13 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.api.routes import router
 from app.config import get_settings
 from app.db import init_db, refresh_database_versions
+from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.sync_realtime import RealtimeService
 from app.sync_static import sync_static
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient
+
+LOGGER = get_logger("main")
 
 
 def _next_monday_4am(now: datetime) -> datetime:
@@ -43,11 +47,11 @@ def _run_weekly_static_sync(app: FastAPI, stop_event: threading.Event) -> None:
             break
 
         try:
-            print(f"[scheduler] weekly static sync started at {datetime.now().isoformat(timespec='seconds')}")
+            LOGGER.info("weekly static sync started")
             sync_static(settings)
-            print(f"[scheduler] weekly static sync completed at {datetime.now().isoformat(timespec='seconds')}")
+            LOGGER.info("weekly static sync completed")
         except Exception as exc:
-            print(f"[scheduler] weekly static sync failed: {exc}")
+            LOGGER.exception("weekly static sync failed: %s", exc)
             # Avoid tight error loop.
             if not stop_event.wait(timeout=60):
                 continue
@@ -56,6 +60,7 @@ def _run_weekly_static_sync(app: FastAPI, stop_event: threading.Event) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    log_dir = setup_logging(settings.project_dir)
     init_db(settings.db_path)
     refresh_database_versions(
         settings.db_path,
@@ -79,6 +84,7 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.settings = settings
+    app.state.log_dir = log_dir
     app.state.token_manager = token_manager
     app.state.tdx_client = tdx_client
     app.state.realtime_service = realtime_service
@@ -94,8 +100,42 @@ async def lifespan(app: FastAPI):
         scheduler_thread.join(timeout=5)
         tdx_client.close()
         token_manager.close()
+        shutdown_logging()
 
 
 app = FastAPI(title="Bus API Server", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    started_at = time.perf_counter()
+    client_host = request.client.host if request.client else "unknown"
+    path = request.url.path
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        LOGGER.exception(
+            "request failed method=%s path=%s client=%s duration_ms=%.1f",
+            request.method,
+            path,
+            client_host,
+            duration_ms,
+        )
+        raise
+
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    LOGGER.info(
+        "request method=%s path=%s status=%s client=%s duration_ms=%.1f",
+        request.method,
+        path,
+        response.status_code,
+        client_host,
+        duration_ms,
+    )
+    return response
+
+
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 app.include_router(router)

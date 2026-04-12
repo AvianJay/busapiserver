@@ -18,11 +18,13 @@ from app.db import (
     refresh_database_versions,
     save_tdx_fetch_state,
 )
+from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient, TDXJSONResponse
 
 
 POINT_PAIR_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)")
+LOGGER = get_logger("sync_static")
 
 
 @dataclass
@@ -318,7 +320,7 @@ def sync_static(
     try:
         with get_connection(settings.db_path) as connection:
             for city in effective_cities:
-                print(f"[sync_static] syncing city={city}")
+                LOGGER.info("syncing city=%s", city)
 
                 routes_state = load_tdx_fetch_state(connection, _resource_key(city, "routes"))
                 stops_state = load_tdx_fetch_state(connection, _resource_key(city, "stop_of_route"))
@@ -353,7 +355,7 @@ def sync_static(
                     and stops_response.not_modified
                     and shapes_response.not_modified
                 ):
-                    print(f"[sync_static] city={city} no static updates (all resources returned 304)")
+                    LOGGER.info("city=%s no static updates (all resources returned 304)", city)
                     continue
 
                 if routes_response.not_modified:
@@ -491,12 +493,17 @@ def sync_static(
                 city_db_path.parent.mkdir(parents=True, exist_ok=True)
                 temp_city_db_path.replace(city_db_path)
 
-                print(
-                    f"[sync_static] city={city} routes={len(static_routes)} "
-                    f"stop_of_route={len(stop_of_route_items)} shapes={len(shapes)} "
-                    f"city_db={city_db_path.name} "
-                    f"status(routes/stops/shapes)="
-                    f"{routes_response.status_code}/{stops_response.status_code}/{shapes_response.status_code}"
+                LOGGER.info(
+                    "city=%s routes=%s stop_of_route=%s shapes=%s city_db=%s "
+                    "status(routes/stops/shapes)=%s/%s/%s",
+                    city,
+                    len(static_routes),
+                    len(stop_of_route_items),
+                    len(shapes),
+                    city_db_path.name,
+                    routes_response.status_code,
+                    stops_response.status_code,
+                    shapes_response.status_code,
                 )
 
         export_download_db(settings.db_path, settings.download_db_path)
@@ -506,7 +513,7 @@ def sync_static(
             city_db_paths={city: settings.city_db_path(city) for city in effective_cities},
             force=force,
         )
-        print(f"[sync_static] built download db at {settings.download_db_path}")
+        LOGGER.info("built download db at %s", settings.download_db_path)
     finally:
         client.close()
         token_manager.close()
@@ -526,13 +533,17 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    setup_logging(settings.project_dir)
     cities = None
     if args.cities:
         cities = tuple(
             item.strip() for item in args.cities.split(",") if item.strip()
         ) or settings.tdx_cities
 
-    sync_static(settings, cities=cities, force=args.force)
+    try:
+        sync_static(settings, cities=cities, force=args.force)
+    finally:
+        shutdown_logging()
 
 
 if __name__ == "__main__":

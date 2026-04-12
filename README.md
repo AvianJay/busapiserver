@@ -172,6 +172,9 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 ## Notes
 
 - All API timestamps are Unix timestamps in seconds.
+- Runtime logs are written to `./logs/app.log`.
+- Log lines include local timestamp, log level, and logger name.
+- Logs rotate daily and files older than 7 days are removed automatically.
 - TDX authentication uses `client_credentials`.
 - Access tokens are cached in memory and reused until near expiration.
 - Static sync uses TDX `Last-Modified` / `If-Modified-Since` for conditional requests.
