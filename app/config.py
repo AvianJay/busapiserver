@@ -119,6 +119,7 @@ class Settings:
     tdx_retry_backoff: float
     tdx_min_request_interval: float
     realtime_cache_ttl: int
+    realtime_track_ttl: int
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -146,6 +147,7 @@ class Settings:
             tdx_retry_backoff=float(os.getenv("TDX_RETRY_BACKOFF", "2.0")),
             tdx_min_request_interval=float(os.getenv("TDX_MIN_REQUEST_INTERVAL", "0.5")),
             realtime_cache_ttl=int(os.getenv("REALTIME_CACHE_TTL", "5")),
+            realtime_track_ttl=int(os.getenv("REALTIME_TRACK_TTL", "30")),
         )
 
     def require_tdx_credentials(self) -> None:

@@ -149,6 +149,43 @@ class TDXClient:
             retry_on_401=retry_on_401,
         ).payload
 
+    def _normalize_items(self, payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return list(payload)
+        if isinstance(payload, dict):
+            return list(payload.get("Items") or [])
+        return []
+
+    def _build_subroute_filter(self, routeids: Iterable[str]) -> str:
+        clauses = []
+        for routeid in routeids:
+            escaped = routeid.replace("'", "''")
+            clauses.append(f"SubRouteUID eq '{escaped}'")
+        return " or ".join(clauses)
+
+    def _chunk_routeids_for_filter(self, routeids: Iterable[str]) -> list[list[str]]:
+        chunks: list[list[str]] = []
+        current_chunk: list[str] = []
+        current_length = 0
+
+        for routeid in routeids:
+            escaped = routeid.replace("'", "''")
+            clause = f"SubRouteUID eq '{escaped}'"
+            clause_length = len(clause) if not current_chunk else len(" or ") + len(clause)
+            if current_chunk and (len(current_chunk) >= 25 or current_length + clause_length > 1500):
+                chunks.append(current_chunk)
+                current_chunk = [routeid]
+                current_length = len(clause)
+                continue
+
+            current_chunk.append(routeid)
+            current_length += clause_length
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        return chunks
+
     def fetch_paginated_items(
         self,
         path: str,
@@ -169,14 +206,10 @@ class TDXClient:
                 page_params.update(params)
 
             payload = self._request_json(path, params=page_params)
-            if isinstance(payload, list):
-                batch = payload
-            elif isinstance(payload, dict):
-                batch = payload.get("Items") or []
-            else:
+            batch = self._normalize_items(payload)
+            if not batch and not isinstance(payload, (list, dict)):
                 break
 
-            batch = list(batch)
             items.extend(batch)
             if len(batch) < page_size:
                 break
@@ -218,15 +251,10 @@ class TDXClient:
                     last_modified=page.last_modified,
                 )
 
-            payload = page.payload
-            if isinstance(payload, list):
-                batch = payload
-            elif isinstance(payload, dict):
-                batch = payload.get("Items") or []
-            else:
+            batch = self._normalize_items(page.payload)
+            if not batch and not isinstance(page.payload, (list, dict)):
                 break
 
-            batch = list(batch)
             items.extend(batch)
             if len(batch) < page_size:
                 return TDXJSONResponse(
@@ -256,14 +284,64 @@ class TDXClient:
         city: str,
         routeid: str,
     ) -> list[dict[str, Any]]:
-        return self._request_json(
-            f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
-            params={
-                "$filter": f"SubRouteUID eq '{routeid}'",
-                "$format": "JSON",
-                "$top": 2000,
-            },
-        )
+        return self.fetch_estimated_time_of_arrival_batch(city, [routeid]).payload or []
+
+    def fetch_estimated_time_of_arrival_batch(
+        self,
+        city: str,
+        routeids: Iterable[str],
+        *,
+        if_modified_since: str | None = None,
+    ) -> TDXJSONResponse:
+        deduped_routeids: list[str] = []
+        seen = set()
+        for routeid in routeids:
+            cleaned = routeid.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            deduped_routeids.append(cleaned)
+
+        if not deduped_routeids:
+            return TDXJSONResponse(payload=[], status_code=200, last_modified=None)
+
+        chunks = self._chunk_routeids_for_filter(deduped_routeids)
+        if len(chunks) == 1:
+            response = self._request_json_with_meta(
+                f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
+                params={
+                    "$filter": self._build_subroute_filter(chunks[0]),
+                    "$format": "JSON",
+                    "$top": 2000,
+                },
+                if_modified_since=if_modified_since,
+                allow_not_modified=bool(if_modified_since),
+            )
+            if response.not_modified:
+                return TDXJSONResponse(
+                    payload=[],
+                    status_code=response.status_code,
+                    last_modified=response.last_modified,
+                )
+            return TDXJSONResponse(
+                payload=self._normalize_items(response.payload),
+                status_code=response.status_code,
+                last_modified=response.last_modified,
+            )
+
+        items: list[dict[str, Any]] = []
+        for chunk in chunks:
+            response = self._request_json_with_meta(
+                f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
+                params={
+                    "$filter": self._build_subroute_filter(chunk),
+                    "$format": "JSON",
+                    "$top": 2000,
+                },
+            )
+            items.extend(self._normalize_items(response.payload))
+
+        return TDXJSONResponse(payload=items, status_code=200, last_modified=None)
 
     def fetch_realtime_by_frequency(
         self,

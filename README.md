@@ -31,6 +31,10 @@ Optional:
 - `REALTIME_CACHE_TTL`
   - In-memory realtime cache TTL in seconds.
   - Default: `5`
+- `REALTIME_TRACK_TTL`
+  - How long a route stays in the per-city realtime tracking list.
+  - Requests arriving within this window are batched into one TDX ETA fetch for that city.
+  - Default: `30`
 - `TDX_REQUEST_TIMEOUT`
   - Upstream request timeout in seconds.
   - Default: `30`
@@ -185,3 +189,6 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 - `GET /downloads/bus.db` serves the stripped catalog database with `routes` and `paths`.
 - `downloads/{City}.db` stores `stops` for that city only; route/path metadata stays in `downloads/bus.db`.
 - Realtime snapshots are cached in memory inside the server process.
+- Realtime ETA requests are grouped per city for `30s` by default, then fetched from TDX with one OData `$filter` covering all tracked routes in that city.
+- The server still returns only the requested route, but it refreshes cache entries for the other tracked routes from the same city at the same time.
+- Realtime batch fetch metadata is also persisted in `tdx_fetch_state` using `realtime_eta:{city}:...` resource keys.
