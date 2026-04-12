@@ -195,3 +195,4 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 - Realtime ETA requests are grouped per city for `30s` by default, then fetched from TDX with one OData `$filter` covering all tracked routes in that city.
 - The server still returns only the requested route, but it refreshes cache entries for the other tracked routes from the same city at the same time.
 - Realtime batch fetch metadata is also persisted in `tdx_fetch_state` using `realtime_eta:{city}:...` resource keys.
+- `/api/v1/routes/{routeid}/realtime/buses` uses the same per-city batching strategy and stores fetch metadata as `realtime_buses:{city}:...`.

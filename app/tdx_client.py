@@ -303,6 +303,19 @@ class TDXClient:
         *,
         if_modified_since: str | None = None,
     ) -> TDXJSONResponse:
+        return self._fetch_subroute_batch(
+            f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
+            routeids,
+            if_modified_since=if_modified_since,
+        )
+
+    def _fetch_subroute_batch(
+        self,
+        path: str,
+        routeids: Iterable[str],
+        *,
+        if_modified_since: str | None = None,
+    ) -> TDXJSONResponse:
         deduped_routeids: list[str] = []
         seen = set()
         for routeid in routeids:
@@ -318,7 +331,7 @@ class TDXClient:
         chunks = self._chunk_routeids_for_filter(deduped_routeids)
         if len(chunks) == 1:
             response = self._request_json_with_meta(
-                f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
+                path,
                 params={
                     "$filter": self._build_subroute_filter(chunks[0]),
                     "$format": "JSON",
@@ -342,7 +355,7 @@ class TDXClient:
         items: list[dict[str, Any]] = []
         for chunk in chunks:
             response = self._request_json_with_meta(
-                f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
+                path,
                 params={
                     "$filter": self._build_subroute_filter(chunk),
                     "$format": "JSON",
@@ -358,16 +371,17 @@ class TDXClient:
         city: str,
         routeid: str,
     ) -> list[dict[str, Any]]:
-        payload = self._request_json(
+        return self.fetch_realtime_by_frequency_batch(city, [routeid]).payload or []
+
+    def fetch_realtime_by_frequency_batch(
+        self,
+        city: str,
+        routeids: Iterable[str],
+        *,
+        if_modified_since: str | None = None,
+    ) -> TDXJSONResponse:
+        return self._fetch_subroute_batch(
             f"/v2/Bus/RealTimeByFrequency/City/{city}",
-            params={
-                "$filter": f"SubRouteUID eq '{routeid}'",
-                "$format": "JSON",
-                "$top": 2000,
-            },
+            routeids,
+            if_modified_since=if_modified_since,
         )
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict):
-            return list(payload.get("Items") or [])
-        return []

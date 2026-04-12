@@ -16,6 +16,7 @@ from app.db import (
     init_db,
     load_route_static,
     load_tdx_fetch_state,
+    route_exists,
     save_tdx_fetch_state,
 )
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
@@ -26,7 +27,7 @@ from app.tdx_client import TDXClient, TDXJSONResponse
 STOP_STATUS_MESSAGES = {
     1: "\u5c1a\u672a\u767c\u8eca",
     2: "\u4ea4\u7ba1\u4e0d\u505c\u9760",
-    3: "末班駛離",
+    3: "\u672b\u73ed\u8eca\u5df2\u904e",
     4: "\u4eca\u65e5\u672a\u71df\u904b",
 }
 
@@ -51,6 +52,12 @@ class RouteNotFoundError(KeyError):
 @dataclass
 class CacheEntry:
     snapshot: dict[str, Any]
+    expires_at: float
+
+
+@dataclass
+class BusesCacheEntry:
+    buses: list[dict[str, Any]]
     expires_at: float
 
 
@@ -237,10 +244,10 @@ def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: st
     return observations
 
 
-def _realtime_resource_key(city: str, routeids: list[str]) -> str:
+def _batched_resource_key(kind: str, city: str, routeids: list[str]) -> str:
     joined = "\n".join(routeids).encode("utf-8")
     digest = hashlib.sha1(joined).hexdigest()[:16]
-    return f"realtime_eta:{city}:{len(routeids)}:{digest}"
+    return f"{kind}:{city}:{len(routeids)}:{digest}"
 
 
 def _persist_fetch_state(
@@ -268,11 +275,61 @@ def _prune_old_realtime_fetch_state(connection, now: int) -> None:
     connection.execute(
         """
         DELETE FROM tdx_fetch_state
-        WHERE resource_key LIKE 'realtime_eta:%'
+        WHERE (
+            resource_key LIKE 'realtime_eta:%'
+            OR resource_key LIKE 'realtime_buses:%'
+        )
           AND last_checked_at < ?
         """,
         (now - REALTIME_FETCH_STATE_RETENTION_SECONDS,),
     )
+
+
+def _build_buses_payload(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buses_by_plate: dict[str, dict[str, Any]] = {}
+
+    for item in items:
+        if _to_int_or_none(item.get("DutyStatus")) == 2:
+            continue
+
+        plate = _normalize_plate(item.get("PlateNumb"))
+        if plate is None:
+            continue
+
+        position = item.get("BusPosition") or {}
+        lat_raw = position.get("PositionLat")
+        lon_raw = position.get("PositionLon")
+        if lat_raw is None or lon_raw is None:
+            continue
+
+        try:
+            lat = float(lat_raw)
+            lon = float(lon_raw)
+        except (TypeError, ValueError):
+            continue
+
+        bus = {
+            "id": plate,
+            "direction": item.get("Direction"),
+            "lat": lat,
+            "lon": lon,
+            "speed": item.get("Speed"),
+            "azimuth": item.get("Azimuth"),
+            "status": item.get("BusStatus"),
+            "time": _to_unix_seconds(item.get("GPSTime")),
+        }
+
+        existing = buses_by_plate.get(plate)
+        if existing is None:
+            buses_by_plate[plate] = bus
+            continue
+
+        existing_time = existing.get("time")
+        next_time = bus.get("time")
+        if next_time is not None and (existing_time is None or next_time > existing_time):
+            buses_by_plate[plate] = bus
+
+    return list(buses_by_plate.values())
 
 
 class RealtimeService:
@@ -349,7 +406,7 @@ class RealtimeService:
             for routeid in effective_routeids
         }
 
-        resource_key = _realtime_resource_key(city, effective_routeids)
+        resource_key = _batched_resource_key("realtime_eta", city, effective_routeids)
         with get_connection(self.settings.db_path) as connection:
             previous_state = None
             if not force_refresh and all(snapshot is not None for snapshot in stale_snapshots.values()):
@@ -642,6 +699,206 @@ class RealtimeService:
         with self._cache_lock:
             self._cache[routeid] = CacheEntry(
                 snapshot=snapshot,
+                expires_at=time.time() + self.settings.realtime_cache_ttl,
+            )
+
+
+class RouteBusesService:
+    def __init__(self, settings: Settings, client: TDXClient) -> None:
+        self.settings = settings
+        self.client = client
+        self._cache: dict[str, BusesCacheEntry] = {}
+        self._cache_lock = threading.Lock()
+        self._tracked_routes: dict[str, dict[str, float]] = {}
+        self._tracked_routes_lock = threading.Lock()
+        self._city_refresh_locks: dict[str, threading.Lock] = {}
+        self._city_refresh_locks_guard = threading.Lock()
+
+    def get_buses(self, routeid: str, *, force_refresh: bool = False) -> list[dict[str, Any]]:
+        if not self._route_exists(routeid):
+            raise RouteNotFoundError(routeid)
+
+        city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
+        if city is None:
+            return self._get_single_route_buses(routeid, force_refresh=force_refresh)
+
+        self._track_route(city, routeid)
+
+        if not force_refresh:
+            cached = self._get_cached(routeid)
+            if cached is not None:
+                return cached
+
+        city_lock = self._get_city_refresh_lock(city)
+        with city_lock:
+            if not force_refresh:
+                cached = self._get_cached(routeid)
+                if cached is not None:
+                    return cached
+
+            try:
+                self._refresh_city_cache(city, routeid, force_refresh=force_refresh)
+            except Exception:
+                stale = self._get_cached(routeid, allow_expired=True)
+                if stale is not None:
+                    LOGGER.warning(
+                        "using stale buses cache routeid=%s city=%s after refresh failure",
+                        routeid,
+                        city,
+                    )
+                    self._set_cached(routeid, stale)
+                    return stale
+                raise
+
+            cached = self._get_cached(routeid, allow_expired=True)
+            if cached is not None:
+                self._set_cached(routeid, cached)
+                return cached
+
+        return []
+
+    def _refresh_city_cache(
+        self,
+        city: str,
+        requested_routeid: str,
+        *,
+        force_refresh: bool,
+    ) -> None:
+        routeids = self._get_tracked_routeids(city, include_routeid=requested_routeid)
+        effective_routeids = sorted(routeids)
+        stale_buses = {
+            routeid: self._get_cached(routeid, allow_expired=True)
+            for routeid in effective_routeids
+        }
+
+        resource_key = _batched_resource_key("realtime_buses", city, effective_routeids)
+        with get_connection(self.settings.db_path) as connection:
+            previous_state = None
+            if not force_refresh and all(buses is not None for buses in stale_buses.values()):
+                previous_state = load_tdx_fetch_state(connection, resource_key)
+
+            response = self.client.fetch_realtime_by_frequency_batch(
+                city,
+                effective_routeids,
+                if_modified_since=None
+                if force_refresh or previous_state is None
+                else previous_state.get("last_modified"),
+            )
+
+            checked_at = int(time.time())
+            _persist_fetch_state(connection, resource_key, response, checked_at, previous_state)
+            _prune_old_realtime_fetch_state(connection, checked_at)
+            connection.commit()
+
+        if response.not_modified:
+            LOGGER.info(
+                "realtime buses batch not modified city=%s routes=%s requested_routeid=%s",
+                city,
+                len(effective_routeids),
+                requested_routeid,
+            )
+            for routeid, buses in stale_buses.items():
+                if buses is not None:
+                    self._set_cached(routeid, buses)
+            return
+
+        LOGGER.info(
+            "realtime buses batch refreshed city=%s routes=%s requested_routeid=%s status=%s items=%s",
+            city,
+            len(effective_routeids),
+            requested_routeid,
+            response.status_code,
+            len(response.payload or []),
+        )
+
+        items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in response.payload or []:
+            routeid = item.get("SubRouteUID") or item.get("RouteUID")
+            if routeid in stale_buses:
+                items_by_route[routeid].append(item)
+
+        for routeid in effective_routeids:
+            self._set_cached(routeid, _build_buses_payload(items_by_route.get(routeid, [])))
+
+    def _get_single_route_buses(self, routeid: str, *, force_refresh: bool) -> list[dict[str, Any]]:
+        if not force_refresh:
+            cached = self._get_cached(routeid)
+            if cached is not None:
+                return cached
+
+        try:
+            items: list[dict[str, Any]] = []
+            for city in self._candidate_cities_for_route(routeid):
+                current_items = self.client.fetch_realtime_by_frequency(city, routeid)
+                if current_items:
+                    items = current_items
+                    break
+            buses = _build_buses_payload(items)
+        except Exception:
+            stale = self._get_cached(routeid, allow_expired=True)
+            if stale is not None:
+                LOGGER.warning("using stale buses cache routeid=%s after single-route refresh failure", routeid)
+                self._set_cached(routeid, stale)
+                return stale
+            raise
+
+        self._set_cached(routeid, buses)
+        return buses
+
+    def _route_exists(self, routeid: str) -> bool:
+        with get_connection(self.settings.db_path) as connection:
+            return route_exists(connection, routeid)
+
+    def _candidate_cities_for_route(self, routeid: str) -> list[str]:
+        candidate_cities: list[str] = []
+        guessed_city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
+        if guessed_city:
+            candidate_cities.append(guessed_city)
+        for city in self.settings.tdx_cities:
+            if city not in candidate_cities:
+                candidate_cities.append(city)
+        return candidate_cities
+
+    def _track_route(self, city: str, routeid: str) -> None:
+        self._get_tracked_routeids(city, include_routeid=routeid)
+
+    def _get_tracked_routeids(self, city: str, *, include_routeid: str | None = None) -> list[str]:
+        now = time.monotonic()
+        expires_at = now + self.settings.realtime_track_ttl
+
+        with self._tracked_routes_lock:
+            city_routes = self._tracked_routes.setdefault(city, {})
+            expired_routeids = [routeid for routeid, route_expires_at in city_routes.items() if route_expires_at < now]
+            for routeid in expired_routeids:
+                city_routes.pop(routeid, None)
+
+            if include_routeid:
+                city_routes[include_routeid] = expires_at
+
+            if not city_routes:
+                self._tracked_routes.pop(city, None)
+                return []
+
+            return sorted(city_routes)
+
+    def _get_city_refresh_lock(self, city: str) -> threading.Lock:
+        with self._city_refresh_locks_guard:
+            return self._city_refresh_locks.setdefault(city, threading.Lock())
+
+    def _get_cached(self, routeid: str, *, allow_expired: bool = False) -> list[dict[str, Any]] | None:
+        now = time.time()
+        with self._cache_lock:
+            entry = self._cache.get(routeid)
+            if entry is None:
+                return None
+            if not allow_expired and entry.expires_at < now:
+                return None
+            return [dict(item) for item in entry.buses]
+
+    def _set_cached(self, routeid: str, buses: list[dict[str, Any]]) -> None:
+        with self._cache_lock:
+            self._cache[routeid] = BusesCacheEntry(
+                buses=[dict(item) for item in buses],
                 expires_at=time.time() + self.settings.realtime_cache_ttl,
             )
 

@@ -12,7 +12,7 @@ from app.api.routes import router
 from app.config import get_settings
 from app.db import init_db, refresh_database_versions
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
-from app.sync_realtime import RealtimeService
+from app.sync_realtime import RealtimeService, RouteBusesService
 from app.sync_static import sync_static
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient
@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
     token_manager = TDXTokenManager(settings)
     tdx_client = TDXClient(settings, token_manager)
     realtime_service = RealtimeService(settings, tdx_client)
+    route_buses_service = RouteBusesService(settings, tdx_client)
     scheduler_stop_event = threading.Event()
     scheduler_thread = threading.Thread(
         target=_run_weekly_static_sync,
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI):
     app.state.token_manager = token_manager
     app.state.tdx_client = tdx_client
     app.state.realtime_service = realtime_service
+    app.state.route_buses_service = route_buses_service
     app.state.scheduler_stop_event = scheduler_stop_event
     app.state.scheduler_thread = scheduler_thread
 

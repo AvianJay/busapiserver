@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import MutableMapping
-from datetime import datetime, timezone
 import re
 import threading
 import time
@@ -12,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
-from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME, guess_city_from_routeid
+from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME
 from app.sync_realtime import RouteNotFoundError
 
 
@@ -20,11 +19,8 @@ router = APIRouter()
 
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
-BUSES_CACHE_TTL_SECONDS = 5
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
-_buses_cache_lock = threading.Lock()
-_buses_cache: MutableMapping[str, tuple[float, list[dict]]] = {}
 _download_name_pattern = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 
@@ -66,28 +62,6 @@ def _check_route_rate_limit(request: Request) -> None:
         hits.append(now)
 
 
-def _get_cached_route_buses(routeid: str, *, allow_expired: bool = False) -> list[dict] | None:
-    now = time.monotonic()
-    with _buses_cache_lock:
-        cached = _buses_cache.get(routeid)
-        if cached is None:
-            return None
-
-        expires_at, payload = cached
-        if not allow_expired and expires_at < now:
-            return None
-
-        return [dict(item) for item in payload]
-
-
-def _set_cached_route_buses(routeid: str, payload: list[dict]) -> None:
-    with _buses_cache_lock:
-        _buses_cache[routeid] = (
-            time.monotonic() + BUSES_CACHE_TTL_SECONDS,
-            [dict(item) for item in payload],
-        )
-
-
 def _encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> str:
     factor = 10**precision
     output: list[str] = []
@@ -109,39 +83,6 @@ def _encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> s
         previous_lon = lon_value
 
     return "".join(output)
-
-
-def _to_unix_seconds(value: str | None) -> int | None:
-    if not value:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp())
-
-
-def _to_int_or_none(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _candidate_cities_for_route(routeid: str, configured_cities: tuple[str, ...]) -> list[str]:
-    cities: list[str] = []
-    guessed_city = guess_city_from_routeid(routeid, configured_cities)
-    if guessed_city:
-        cities.append(guessed_city)
-    for city in configured_cities:
-        if city not in cities:
-            cities.append(city)
-    return cities
 
 
 _city_name_to_prefix_lower = {
@@ -308,75 +249,15 @@ def search_city_routes(
 @router.get("/api/v1/routes/{routeid}/realtime/buses")
 def get_route_buses(routeid: str, request: Request) -> list[dict]:
     _check_route_rate_limit(request)
-    settings = request.app.state.settings
-    with get_connection(settings.db_path) as connection:
-        static_route = load_route_static(connection, routeid)
-    if static_route is None:
-        raise HTTPException(status_code=404, detail=f"Route {routeid} was not found.")
-
-    cached = _get_cached_route_buses(routeid)
-    if cached is not None:
-        return cached
-
-    client = request.app.state.tdx_client
-    items: list[dict] = []
+    service = request.app.state.route_buses_service
     try:
-        for city in _candidate_cities_for_route(routeid, settings.tdx_cities):
-            current_items = client.fetch_realtime_by_frequency(city, routeid)
-            if current_items:
-                items = current_items
-                break
+        return service.get_buses(routeid)
+    except RouteNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Route {routeid} was not found.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except requests.RequestException as exc:
-        stale = _get_cached_route_buses(routeid, allow_expired=True)
-        if stale is not None:
-            return stale
         raise HTTPException(status_code=502, detail="TDX upstream request failed.") from exc
-
-    buses_by_plate: dict[str, dict] = {}
-    for item in items:
-        if _to_int_or_none(item.get("DutyStatus")) == 2:
-            continue
-
-        plate = (item.get("PlateNumb") or "").strip()
-        if not plate or plate == "-1":
-            continue
-
-        position = item.get("BusPosition") or {}
-        lat_raw = position.get("PositionLat")
-        lon_raw = position.get("PositionLon")
-        if lat_raw is None or lon_raw is None:
-            continue
-
-        try:
-            lat = float(lat_raw)
-            lon = float(lon_raw)
-        except (TypeError, ValueError):
-            continue
-
-        bus = {
-            "id": plate,
-            "direction": item.get("Direction"),
-            "lat": lat,
-            "lon": lon,
-            "speed": item.get("Speed"),
-            "azimuth": item.get("Azimuth"),
-            "status": item.get("BusStatus"),
-            "time": _to_unix_seconds(item.get("GPSTime")),
-        }
-
-        existing = buses_by_plate.get(plate)
-        if existing is None:
-            buses_by_plate[plate] = bus
-            continue
-
-        existing_time = existing.get("time")
-        next_time = bus.get("time")
-        if next_time is not None and (existing_time is None or next_time > existing_time):
-            buses_by_plate[plate] = bus
-
-    response = list(buses_by_plate.values())
-    _set_cached_route_buses(routeid, response)
-    return response
 
 
 @router.get("/api/v1/routes/{routeid}/paths/{pathid}/points")
