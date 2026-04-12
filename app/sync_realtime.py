@@ -25,7 +25,7 @@ from app.tdx_client import TDXClient, TDXJSONResponse
 STOP_STATUS_MESSAGES = {
     1: "\u5c1a\u672a\u767c\u8eca",
     2: "\u4ea4\u7ba1\u4e0d\u505c\u9760",
-    3: "\u672b\u73ed\u8eca\u5df2\u904e",
+    3: "末班駛離",
     4: "\u4eca\u65e5\u672a\u71df\u904b",
 }
 
