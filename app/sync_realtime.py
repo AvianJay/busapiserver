@@ -91,8 +91,31 @@ def _to_int_or_none(value: Any) -> int | None:
         return None
 
 
-def _build_message(item: dict[str, Any]) -> str:
-    if _to_int_or_none(item.get("EstimateTime")) is not None:
+def _adjusted_eta(
+    data: dict[str, Any],
+    *,
+    now_ts: int,
+    fallback_update_time: str | None = None,
+) -> int | None:
+    estimate_time = _to_int_or_none(data.get("EstimateTime"))
+    if estimate_time is None:
+        return None
+
+    update_time = (
+        data.get("SrcUpdateTime")
+        or data.get("UpdateTime")
+        or fallback_update_time
+    )
+    update_ts = _to_unix_seconds(update_time)
+    if update_ts is None:
+        return estimate_time
+
+    eta = estimate_time - (now_ts - update_ts)
+    return max(-1, eta)
+
+
+def _build_message(item: dict[str, Any], *, now_ts: int) -> str:
+    if _adjusted_eta(item, now_ts=now_ts) is not None:
         return ""
 
     stop_status = _to_int_or_none(item.get("StopStatus"))
@@ -206,11 +229,17 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
         stop_bucket["message"] = ""
 
 
-def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: str) -> list[PlateObservation]:
+def _collect_plate_observations(
+    item: dict[str, Any],
+    *,
+    pathid: int,
+    stopid: str,
+    now_ts: int,
+) -> list[PlateObservation]:
     observations: list[PlateObservation] = []
 
     top_plate = _normalize_plate(item.get("PlateNumb"))
-    top_eta = _to_int_or_none(item.get("EstimateTime"))
+    top_eta = _adjusted_eta(item, now_ts=now_ts)
     top_is_arriving = _to_int_or_none(item.get("VehicleStopStatus")) == ARRIVING_VEHICLE_STOP_STATUS
     if top_plate is not None and top_eta is not None:
         observations.append(
@@ -225,7 +254,11 @@ def _collect_plate_observations(item: dict[str, Any], *, pathid: int, stopid: st
 
     for estimate in item.get("Estimates") or []:
         estimate_plate = _normalize_plate(estimate.get("PlateNumb"))
-        estimate_eta = _to_int_or_none(estimate.get("EstimateTime"))
+        estimate_eta = _adjusted_eta(
+            estimate,
+            now_ts=now_ts,
+            fallback_update_time=item.get("SrcUpdateTime") or item.get("UpdateTime"),
+        )
         if estimate_plate is None or estimate_eta is None:
             continue
         estimate_is_arriving = (
@@ -553,6 +586,7 @@ class RealtimeService:
         static_route: dict[str, Any],
         items: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        now_ts = int(time.time())
         item_times = []
         for item in items:
             item_time = (
@@ -589,8 +623,8 @@ class RealtimeService:
                 },
             )
 
-            estimate_time = _to_int_or_none(item.get("EstimateTime"))
-            message = _build_message(item)
+            estimate_time = _adjusted_eta(item, now_ts=now_ts)
+            message = _build_message(item, now_ts=now_ts)
             if estimate_time is not None:
                 if stop_bucket["eta"] is None or estimate_time < stop_bucket["eta"]:
                     stop_bucket["eta"] = estimate_time
@@ -611,7 +645,11 @@ class RealtimeService:
 
             for estimate in item.get("Estimates") or []:
                 estimate_plate = _normalize_plate(estimate.get("PlateNumb"))
-                estimate_eta = _to_int_or_none(estimate.get("EstimateTime"))
+                estimate_eta = _adjusted_eta(
+                    estimate,
+                    now_ts=now_ts,
+                    fallback_update_time=item.get("SrcUpdateTime") or item.get("UpdateTime"),
+                )
                 estimate_is_arriving = (
                     _to_int_or_none(estimate.get("VehicleStopStatus")) == ARRIVING_VEHICLE_STOP_STATUS
                 )
@@ -622,7 +660,12 @@ class RealtimeService:
                     is_arriving=estimate_is_arriving,
                 )
 
-            for observation in _collect_plate_observations(item, pathid=pathid, stopid=stopid):
+            for observation in _collect_plate_observations(
+                item,
+                pathid=pathid,
+                stopid=stopid,
+                now_ts=now_ts,
+            ):
                 plate_candidates.setdefault((observation.pathid, observation.plate), []).append(observation)
 
         for (pathid, plate), observations in plate_candidates.items():
