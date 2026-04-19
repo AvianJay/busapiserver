@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -479,6 +480,142 @@ def sync_static(
                         delete_main_routes_by_prefix(connection, prefix)
                         for route in static_routes.values():
                             _replace_main_route(connection, route)
+
+                # --- Sync Operators ---
+                operators_response = client.fetch_paginated_items_conditional(
+                    f"/v2/Bus/Operator/City/{city}",
+                    if_modified_since=None,
+                )
+                operators_raw = operators_response.payload or []
+                if prefix:
+                    with connection:
+                        connection.execute(
+                            "DELETE FROM route_operators WHERE routeid LIKE ?",
+                            (f"{prefix}%",),
+                        )
+                        for op in operators_raw:
+                            op_id = op.get("OperatorID")
+                            if not op_id:
+                                continue
+                            op_name_zh, op_name_en = _name_parts(op.get("OperatorName"))
+                            connection.execute(
+                                """
+                                INSERT OR REPLACE INTO operators
+                                    (operator_id, name, name_en, code, phone, email, url)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    op_id,
+                                    op_name_zh or op_id,
+                                    op_name_en,
+                                    _optional_text(op.get("OperatorCode")),
+                                    _optional_text(op.get("OperatorPhone")),
+                                    _optional_text(op.get("OperatorEmail")),
+                                    _optional_text(op.get("OperatorUrl")),
+                                ),
+                            )
+
+                        # Build route→operator mapping from route data
+                        for route_item in routes:
+                            for seq, op_ref in enumerate(route_item.get("Operators") or []):
+                                op_id = op_ref.get("OperatorID")
+                                route_uid = route_item.get("RouteUID")
+                                if not op_id or not route_uid:
+                                    continue
+                                # Map to all subroute UIDs under this route
+                                for sub in route_item.get("SubRoutes") or []:
+                                    sub_uid = sub.get("SubRouteUID") or route_uid
+                                    if sub_uid in static_routes:
+                                        connection.execute(
+                                            """
+                                            INSERT OR IGNORE INTO route_operators
+                                                (routeid, operator_id, seq)
+                                            VALUES (?, ?, ?)
+                                            """,
+                                            (sub_uid, op_id, seq),
+                                        )
+
+                # --- Sync Schedules ---
+                schedules_response = client.fetch_paginated_items_conditional(
+                    f"/v2/Bus/Schedule/City/{city}",
+                    if_modified_since=None,
+                )
+                schedules_raw = schedules_response.payload or []
+                if prefix:
+                    with connection:
+                        connection.execute(
+                            "DELETE FROM route_schedules WHERE routeid LIKE ?",
+                            (f"{prefix}%",),
+                        )
+                        for sched in schedules_raw:
+                            route_uid = sched.get("SubRouteUID") or sched.get("RouteUID")
+                            if not route_uid or route_uid not in static_routes:
+                                continue
+                            direction = int(sched.get("Direction") or 0)
+                            subroute_uid = sched.get("SubRouteUID") or ""
+
+                            # Frequency entries
+                            for freq_seq, freq in enumerate(sched.get("Frequencys") or []):
+                                sd = freq.get("ServiceDay") or {}
+                                service_days = json.dumps({
+                                    "mon": sd.get("Monday", 0),
+                                    "tue": sd.get("Tuesday", 0),
+                                    "wed": sd.get("Wednesday", 0),
+                                    "thu": sd.get("Thursday", 0),
+                                    "fri": sd.get("Friday", 0),
+                                    "sat": sd.get("Saturday", 0),
+                                    "sun": sd.get("Sunday", 0),
+                                    "holiday": sd.get("NationalHolidays", 0),
+                                }, ensure_ascii=False)
+                                payload = json.dumps({
+                                    "start": freq.get("StartTime"),
+                                    "end": freq.get("EndTime"),
+                                    "min_headway": freq.get("MinHeadwayMins"),
+                                    "max_headway": freq.get("MaxHeadwayMins"),
+                                }, ensure_ascii=False)
+                                connection.execute(
+                                    """
+                                    INSERT OR REPLACE INTO route_schedules
+                                        (routeid, subroute_uid, direction, kind, seq, service_days, payload)
+                                    VALUES (?, ?, ?, 'frequency', ?, ?, ?)
+                                    """,
+                                    (route_uid, subroute_uid, direction, freq_seq, service_days, payload),
+                                )
+
+                            # Timetable entries
+                            for tt_seq, tt in enumerate(sched.get("Timetables") or []):
+                                sd = tt.get("ServiceDay") or {}
+                                service_days = json.dumps({
+                                    "mon": sd.get("Monday", 0),
+                                    "tue": sd.get("Tuesday", 0),
+                                    "wed": sd.get("Wednesday", 0),
+                                    "thu": sd.get("Thursday", 0),
+                                    "fri": sd.get("Friday", 0),
+                                    "sat": sd.get("Saturday", 0),
+                                    "sun": sd.get("Sunday", 0),
+                                    "holiday": sd.get("NationalHolidays", 0),
+                                }, ensure_ascii=False)
+                                stop_times = []
+                                for st in tt.get("StopTimes") or []:
+                                    stop_times.append({
+                                        "seq": st.get("StopSequence"),
+                                        "stopid": st.get("StopID") or st.get("StopUID") or "",
+                                        "arrival": st.get("ArrivalTime"),
+                                        "departure": st.get("DepartureTime"),
+                                    })
+                                payload = json.dumps({
+                                    "trip_id": tt.get("TripID"),
+                                    "is_low_floor": tt.get("IsLowFloor"),
+                                    "stop_times": stop_times,
+                                }, ensure_ascii=False)
+                                connection.execute(
+                                    """
+                                    INSERT OR REPLACE INTO route_schedules
+                                        (routeid, subroute_uid, direction, kind, seq, service_days, payload)
+                                    VALUES (?, ?, ?, 'timetable', ?, ?, ?)
+                                    """,
+                                    (route_uid, subroute_uid, direction, tt_seq, service_days, payload),
+                                )
 
                 city_db_path = settings.city_db_path(city)
                 temp_city_db_path = _city_temp_db_path(city_db_path)

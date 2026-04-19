@@ -54,6 +54,42 @@ CREATE INDEX IF NOT EXISTS idx_stops_routeid ON stops(routeid);
 CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
 CREATE INDEX IF NOT EXISTS idx_path_points_routeid ON path_points(routeid);
 
+CREATE TABLE IF NOT EXISTS operators (
+    operator_id TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    code        TEXT,
+    phone       TEXT,
+    email       TEXT,
+    url         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS route_operators (
+    routeid     TEXT NOT NULL,
+    operator_id TEXT NOT NULL,
+    seq         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (routeid, operator_id),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE,
+    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_operators_routeid ON route_operators(routeid);
+CREATE INDEX IF NOT EXISTS idx_route_operators_operator ON route_operators(operator_id);
+
+CREATE TABLE IF NOT EXISTS route_schedules (
+    routeid       TEXT NOT NULL,
+    subroute_uid  TEXT NOT NULL DEFAULT '',
+    direction     INTEGER NOT NULL DEFAULT 0,
+    kind          TEXT NOT NULL,             -- 'frequency' or 'timetable'
+    seq           INTEGER NOT NULL DEFAULT 0,
+    service_days  TEXT NOT NULL,             -- JSON {mon..sun, holiday}
+    payload       TEXT NOT NULL,             -- JSON payload
+    PRIMARY KEY (routeid, subroute_uid, direction, kind, seq),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_schedules_routeid ON route_schedules(routeid);
+
 CREATE TABLE IF NOT EXISTS tdx_fetch_state (
     resource_key    TEXT PRIMARY KEY,
     last_modified   TEXT,
@@ -76,12 +112,13 @@ DOWNLOAD_SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS routes (
-    routeid     TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    name_en     TEXT,
-    city_code   TEXT NOT NULL,
-    path_name   TEXT,
-    path_name_en TEXT
+    routeid        TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    name_en        TEXT,
+    city_code      TEXT NOT NULL,
+    path_name      TEXT,
+    path_name_en   TEXT,
+    operator_names TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paths (
@@ -194,15 +231,29 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                         )
                     ),
                     ''
-                ) AS path_name_en
+                ) AS path_name_en,
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(op_name, ' / ')
+                        FROM (
+                            SELECT o.name AS op_name
+                            FROM route_operators ro
+                            JOIN operators o ON o.operator_id = ro.operator_id
+                            WHERE ro.routeid = routes.routeid
+                              AND TRIM(COALESCE(o.name, '')) <> ''
+                            ORDER BY ro.seq ASC, o.name ASC
+                        )
+                    ),
+                    ''
+                ) AS operator_names
             FROM routes
             ORDER BY routes.routeid
             """
         ).fetchall()
         target_connection.executemany(
             """
-            INSERT INTO routes (routeid, name, name_en, city_code, path_name, path_name_en)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO routes (routeid, name, name_en, city_code, path_name, path_name_en, operator_names)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -212,6 +263,7 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                     row["city_code"],
                     row["path_name"],
                     row["path_name_en"],
+                    row["operator_names"],
                 )
                 for row in routes
             ],
@@ -485,7 +537,19 @@ def refresh_database_versions(
     city_db_paths = city_db_paths or {}
 
     entries: list[tuple[str, Path, tuple[str, ...]]] = [
-        ("main", Path(main_db_path), ("routes", "paths", "stops", "path_points")),
+        (
+            "main",
+            Path(main_db_path),
+            (
+                "routes",
+                "paths",
+                "stops",
+                "path_points",
+                "operators",
+                "route_operators",
+                "route_schedules",
+            ),
+        ),
         ("download", Path(download_db_path), ("routes", "paths")),
     ]
     for city_name, city_path in sorted(city_db_paths.items()):

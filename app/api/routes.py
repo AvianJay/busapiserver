@@ -494,3 +494,60 @@ def get_database_version(name: str, request: Request) -> dict:
     if version is None:
         raise HTTPException(status_code=404, detail=f"Database version for {name} was not found.")
     return version
+
+
+@router.get("/api/v1/routes/{routeid}/operators")
+def get_route_operators(routeid: str, request: Request) -> list[dict]:
+    _check_route_rate_limit(request)
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT o.operator_id, o.name, o.name_en, o.code, o.phone, o.email, o.url
+            FROM route_operators ro
+            JOIN operators o ON o.operator_id = ro.operator_id
+            WHERE ro.routeid = ?
+            ORDER BY ro.seq
+            """,
+            (routeid,),
+        ).fetchall()
+    return [
+        {
+            "operator_id": row["operator_id"],
+            "name": row["name"],
+            "name_en": row["name_en"],
+            "code": row["code"],
+            "phone": row["phone"],
+            "email": row["email"],
+            "url": row["url"],
+        }
+        for row in rows
+    ]
+
+
+@router.get("/api/v1/routes/{routeid}/schedule")
+def get_route_schedule(routeid: str, request: Request) -> list[dict]:
+    _check_route_rate_limit(request)
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT subroute_uid, direction, kind, seq, service_days, payload
+            FROM route_schedules
+            WHERE routeid = ?
+            ORDER BY subroute_uid, direction, kind, seq
+            """,
+            (routeid,),
+        ).fetchall()
+    import json as _json
+    return [
+        {
+            "subroute_uid": row["subroute_uid"],
+            "direction": row["direction"],
+            "kind": row["kind"],
+            "seq": row["seq"],
+            "service_days": _json.loads(row["service_days"]),
+            "payload": _json.loads(row["payload"]),
+        }
+        for row in rows
+    ]
