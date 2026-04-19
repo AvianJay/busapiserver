@@ -385,3 +385,6 @@ class TDXClient:
             routeids,
             if_modified_since=if_modified_since,
         )
+
+    def fetch_alerts(self, city: str) -> list[dict[str, Any]]:
+        return self.fetch_paginated_items(f"/v2/Bus/Alert/City/{city}")

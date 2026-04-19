@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import MutableMapping
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import re
 import threading
 import time
@@ -12,7 +14,10 @@ from fastapi.responses import FileResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
 from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME
+from app.logging_utils import get_logger
 from app.sync_realtime import RouteNotFoundError
+
+LOGGER = get_logger("routes")
 
 
 router = APIRouter()
@@ -22,6 +27,24 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
 _download_name_pattern = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+ALERTS_CACHE_TTL_SECONDS = 600  # 10 minutes
+
+
+@dataclass
+class _AlertsCacheEntry:
+    alerts: list[dict]
+    fetched_at: float = field(default_factory=time.monotonic)
+
+    @property
+    def is_fresh(self) -> bool:
+        return (time.monotonic() - self.fetched_at) < ALERTS_CACHE_TTL_SECONDS
+
+
+_alerts_cache: dict[str, _AlertsCacheEntry] = {}
+_alerts_cache_lock = threading.Lock()
+_alerts_in_flight: dict[str, list[dict] | None] = {}
+_alerts_in_flight_lock = threading.Lock()
 
 
 def _get_client_ip(request: Request) -> str:
@@ -304,6 +327,162 @@ def get_route_stops(routeid: str, request: Request) -> dict:
         "name": static_route["name"],
         "paths": response_paths,
     }
+
+
+def _parse_tdx_datetime_to_unix(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _extract_stop_ids(alert: dict) -> list[str]:
+    stop_ids: list[str] = []
+    scopes = alert.get("Scope") or alert.get("AlertScopes")
+    if not scopes:
+        return stop_ids
+    if isinstance(scopes, dict):
+        scopes = [scopes]
+    if not isinstance(scopes, list):
+        return stop_ids
+    for scope in scopes:
+        if not isinstance(scope, dict):
+            continue
+        stops = scope.get("Stops") or []
+        for stop in stops:
+            if not isinstance(stop, dict):
+                continue
+            stop_id = stop.get("StopID") or stop.get("StopUID") or ""
+            if stop_id:
+                stop_ids.append(str(stop_id))
+    return stop_ids
+
+
+def _alert_matches_route(alert: dict, routeid: str) -> bool:
+    route_id = alert.get("RouteID") or ""
+    route_uid = alert.get("RouteUID") or ""
+    if routeid == route_id or routeid == route_uid:
+        return True
+
+    scopes = alert.get("Scope") or alert.get("AlertScopes")
+    if not scopes:
+        return False
+    if isinstance(scopes, dict):
+        scopes = [scopes]
+    if not isinstance(scopes, list):
+        return False
+    for scope in scopes:
+        if not isinstance(scope, dict):
+            continue
+        for route in scope.get("Routes") or []:
+            if isinstance(route, dict):
+                if routeid in (route.get("RouteID", ""), route.get("RouteUID", "")):
+                    return True
+        for subroute in scope.get("SubRoutes") or []:
+            if isinstance(subroute, dict):
+                sub_uid = subroute.get("SubRouteUID") or subroute.get("SubRouteID") or ""
+                if sub_uid.startswith(routeid):
+                    return True
+    return False
+
+
+def _format_alert(alert: dict) -> dict:
+    title_obj = alert.get("Title") or ""
+    desc_obj = alert.get("Description") or ""
+    scope_obj = alert.get("Scope") or ""
+    if isinstance(title_obj, dict):
+        title_obj = title_obj.get("Zh_tw") or title_obj.get("En") or ""
+    if isinstance(desc_obj, dict):
+        desc_obj = desc_obj.get("Zh_tw") or desc_obj.get("En") or ""
+    if isinstance(scope_obj, dict):
+        scope_obj = scope_obj.get("Zh_tw") or scope_obj.get("En") or ""
+    direction = alert.get("Direction")
+    if direction is None:
+        scopes = alert.get("Scope") or alert.get("AlertScopes")
+        if isinstance(scopes, dict):
+            scopes = [scopes]
+        if isinstance(scopes, list):
+            for sc in scopes:
+                if isinstance(sc, dict):
+                    for sr in sc.get("SubRoutes") or []:
+                        if isinstance(sr, dict) and sr.get("Direction") is not None:
+                            direction = sr["Direction"]
+                            break
+                if direction is not None:
+                    break
+    return {
+        "alert_id": alert.get("AlertID") or "",
+        "title": str(title_obj),
+        "description": str(desc_obj),
+        "status": alert.get("Status"),
+        "cause": alert.get("Cause"),
+        "effect": alert.get("Effect"),
+        "direction": direction,
+        "scope": str(scope_obj) if scope_obj else None,
+        "stop_ids": _extract_stop_ids(alert),
+        "start_time": _parse_tdx_datetime_to_unix(alert.get("StartTime")),
+        "end_time": _parse_tdx_datetime_to_unix(alert.get("EndTime")),
+        "publish_time": _parse_tdx_datetime_to_unix(alert.get("PublishTime")),
+        "updated_time": _parse_tdx_datetime_to_unix(alert.get("UpdateTime")),
+    }
+
+
+def _fetch_city_alerts_cached(request: Request, city_name: str) -> list[dict]:
+    with _alerts_cache_lock:
+        cached = _alerts_cache.get(city_name)
+        if cached is not None and cached.is_fresh:
+            return cached.alerts
+
+    # Prevent thundering herd: only one thread fetches per city.
+    with _alerts_in_flight_lock:
+        # Double-check cache after acquiring lock.
+        with _alerts_cache_lock:
+            cached = _alerts_cache.get(city_name)
+            if cached is not None and cached.is_fresh:
+                return cached.alerts
+
+    try:
+        tdx_client = request.app.state.tdx_client
+        raw_alerts = tdx_client.fetch_alerts(city_name)
+        with _alerts_cache_lock:
+            _alerts_cache[city_name] = _AlertsCacheEntry(alerts=raw_alerts)
+        return raw_alerts
+    except Exception as exc:
+        LOGGER.warning("Failed to fetch alerts for %s: %s", city_name, exc)
+        # Return stale cache if available.
+        with _alerts_cache_lock:
+            stale = _alerts_cache.get(city_name)
+            if stale is not None:
+                return stale.alerts
+        raise
+
+
+@router.get("/api/v1/routes/{routeid}/alerts")
+def get_route_alerts(routeid: str, request: Request) -> dict:
+    _check_route_rate_limit(request)
+    prefix = routeid[:3].upper()
+    city_name = CITY_PREFIX_TO_NAME.get(prefix)
+    if city_name is None:
+        raise HTTPException(status_code=404, detail=f"Unknown city prefix for route {routeid}.")
+
+    try:
+        city_alerts = _fetch_city_alerts_cached(request, city_name)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="TDX upstream request failed.") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    matched = [
+        _format_alert(alert)
+        for alert in city_alerts
+        if _alert_matches_route(alert, routeid)
+    ]
+    return {"routeid": routeid, "alerts": matched}
 
 
 @router.get("/api/v1/database/{name}/version")
