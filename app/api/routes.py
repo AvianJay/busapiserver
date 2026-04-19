@@ -462,7 +462,7 @@ def _fetch_city_alerts_cached(request: Request, city_name: str) -> list[dict]:
         raise
 
 
-@router.get("/api/v1/routes/{routeid}/alerts")
+@router.get("/api/v1/routes/{routeuid}/alerts")
 def get_route_alerts(routeuid: str, request: Request) -> dict:
     _check_route_rate_limit(request)
     prefix = routeuid[:3].upper()
