@@ -463,12 +463,13 @@ def _fetch_city_alerts_cached(request: Request, city_name: str) -> list[dict]:
 
 
 @router.get("/api/v1/routes/{routeid}/alerts")
-def get_route_alerts(routeid: str, request: Request) -> dict:
+def get_route_alerts(routeuid: str, request: Request) -> dict:
     _check_route_rate_limit(request)
-    prefix = routeid[:3].upper()
+    prefix = routeuid[:3].upper()
     city_name = CITY_PREFIX_TO_NAME.get(prefix)
+    routeid = routeuid[3:]
     if city_name is None:
-        raise HTTPException(status_code=404, detail=f"Unknown city prefix for route {routeid}.")
+        raise HTTPException(status_code=404, detail=f"Unknown city prefix for route {routeuid}.")
 
     try:
         city_alerts = _fetch_city_alerts_cached(request, city_name)
@@ -482,7 +483,7 @@ def get_route_alerts(routeid: str, request: Request) -> dict:
         for alert in city_alerts
         if _alert_matches_route(alert, routeid)
     ]
-    return {"routeid": routeid, "alerts": matched}
+    return {"routeid": routeuid, "alerts": matched}
 
 
 @router.get("/api/v1/database/{name}/version")
