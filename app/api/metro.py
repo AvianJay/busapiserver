@@ -326,3 +326,180 @@ async def get_s2s_traveltime(system: str, request: Request):
 
     _set_cached(cache_key, result)
     return result
+
+
+# Systems that support StationTimeTable API (TMRT not supported by TDX)
+TIMETABLE_SUPPORTED_SYSTEMS = {"TRTC", "KRTC", "TYMC", "KLRT"}
+
+
+@router.get("/{system}/station-timetable")
+async def get_station_timetable(system: str, request: Request):
+    """Get station timetable for calculating ETA from schedule."""
+    system = system.upper()
+    if system not in METRO_SYSTEMS:
+        raise HTTPException(404, f"Unknown metro system: {system}")
+
+    if system not in TIMETABLE_SUPPORTED_SYSTEMS:
+        # TMRT doesn't support StationTimeTable API on TDX
+        return {"supported": False, "message": "此捷運系統不支援時刻表查詢", "data": []}
+
+    cache_key = f"metro_timetable_{system}"
+    cached = _get_cached(cache_key, STATIC_CACHE_TTL)
+    if cached is not None:
+        return {"supported": True, "data": cached}
+
+    tdx = _get_tdx(request)
+    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/StationTimeTable/{system}")
+
+    result = []
+    for item in raw:
+        timetables = []
+        for tt in item.get("Timetables") or []:
+            timetables.append({
+                "sequence": tt.get("Sequence", 0),
+                "arrival_time": tt.get("ArrivalTime", ""),
+                "departure_time": tt.get("DepartureTime", ""),
+            })
+        result.append({
+            "station_id": item.get("StationID", ""),
+            "station_name": (item.get("StationName") or {}).get("Zh_tw", ""),
+            "direction": item.get("Direction", 0),
+            "line_id": item.get("LineID", ""),
+            "destination_station_id": item.get("DestinationStationID", ""),
+            "destination_station_name": (item.get("DestinationStationName") or {}).get("Zh_tw", ""),
+            "timetables": timetables,
+        })
+
+    _set_cached(cache_key, result)
+    return {"supported": True, "data": result}
+
+
+@router.get("/{system}/lines/{line_id}/eta")
+async def get_line_eta(system: str, line_id: str, request: Request):
+    """Get calculated ETA for each station based on timetable.
+
+    For systems with LiveBoard (TRTC, KRTC, TYMC), prefer LiveBoard.
+    For systems without LiveBoard data, calculate from StationTimeTable.
+    """
+    import datetime
+
+    system = system.upper()
+    if system not in METRO_SYSTEMS:
+        raise HTTPException(404, f"Unknown metro system: {system}")
+
+    now = datetime.datetime.now()
+    current_time = now.strftime("%H:%M")
+
+    # Try LiveBoard first
+    liveboard_cache_key = f"metro_live_{system}_{line_id}"
+    liveboard_cached = _get_cached(liveboard_cache_key, LIVEBOARD_CACHE_TTL)
+
+    tdx = _get_tdx(request)
+    liveboard = []
+
+    if liveboard_cached is not None:
+        liveboard = liveboard_cached
+    elif system in TIMETABLE_SUPPORTED_SYSTEMS:
+        try:
+            raw = tdx.fetch_paginated_items(
+                f"/v2/Rail/Metro/LiveBoard/{system}",
+                params={"$filter": f"LineID eq '{line_id}'", "$format": "JSON"},
+            )
+            for item in raw:
+                liveboard.append({
+                    "station_id": item.get("StationID", ""),
+                    "station_name": (item.get("StationName") or {}).get("Zh_tw", ""),
+                    "line_id": item.get("LineID", ""),
+                    "destination_id": item.get("DestinationStationID") or item.get("DestinationStaionID", ""),
+                    "destination_name": (item.get("DestinationStationName") or {}).get("Zh_tw", ""),
+                    "direction": item.get("Direction", 0),
+                    "trip_head_sign": item.get("TripHeadSign", ""),
+                    "estimated_time": item.get("EstimateTime"),
+                    "service_status": item.get("ServiceStatus", 0),
+                })
+            _set_cached(liveboard_cache_key, liveboard)
+        except Exception:
+            liveboard = []
+
+    # Check if LiveBoard has meaningful data (not all zeros)
+    liveboard_useful = any(
+        e.get("estimated_time") is not None and e.get("estimated_time") > 0
+        for e in liveboard
+    )
+
+    if liveboard_useful:
+        return {
+            "source": "liveboard",
+            "current_time": current_time,
+            "entries": liveboard,
+        }
+
+    # Fall back to timetable calculation
+    if system not in TIMETABLE_SUPPORTED_SYSTEMS:
+        # For TMRT, return frequency info instead
+        freq_data = await get_frequency(system, request)
+        line_freq = [f for f in freq_data if f.get("line_id") == line_id]
+        return {
+            "source": "frequency",
+            "current_time": current_time,
+            "message": "此捷運系統無即時資訊，顯示班距參考",
+            "frequency": line_freq,
+            "entries": [],
+        }
+
+    # Calculate ETA from timetable
+    timetable_response = await get_station_timetable(system, request)
+    if not timetable_response.get("supported"):
+        return {
+            "source": "none",
+            "current_time": current_time,
+            "entries": [],
+        }
+
+    timetable_data = timetable_response.get("data", [])
+    # Filter to this line
+    line_timetables = [t for t in timetable_data if t.get("line_id") == line_id]
+
+    entries = []
+    for station_tt in line_timetables:
+        station_id = station_tt.get("station_id", "")
+        station_name = station_tt.get("station_name", "")
+        direction = station_tt.get("direction", 0)
+        dest_name = station_tt.get("destination_station_name", "")
+        timetables = station_tt.get("timetables", [])
+
+        # Find next arrival
+        upcoming = [
+            t for t in timetables
+            if t.get("arrival_time", "00:00") >= current_time
+        ]
+        if upcoming:
+            next_arrival = upcoming[0].get("arrival_time", "")
+            # Calculate seconds until arrival
+            try:
+                arr_parts = next_arrival.split(":")
+                arr_minutes = int(arr_parts[0]) * 60 + int(arr_parts[1])
+                now_minutes = now.hour * 60 + now.minute
+                eta_seconds = (arr_minutes - now_minutes) * 60 - now.second
+                if eta_seconds < 0:
+                    eta_seconds = 0
+            except (ValueError, IndexError):
+                eta_seconds = None
+
+            entries.append({
+                "station_id": station_id,
+                "station_name": station_name,
+                "line_id": line_id,
+                "direction": direction,
+                "destination_name": dest_name,
+                "trip_head_sign": f"往{dest_name}" if dest_name else "",
+                "estimated_time": eta_seconds,
+                "next_arrival": next_arrival,
+                "service_status": 0,
+            })
+
+    return {
+        "source": "timetable",
+        "current_time": current_time,
+        "entries": entries,
+    }
