@@ -204,10 +204,10 @@ async def get_liveboard(system: str, line_id: str, request: Request):
             "station_id": item.get("StationID", ""),
             "station_name": (item.get("StationName") or {}).get("Zh_tw", ""),
             "line_id": item.get("LineID", ""),
-            "destination_id": item.get("DestinationStationID", ""),
+            "destination_id": item.get("DestinationStationID") or item.get("DestinationStaionID", ""),
             "destination_name": (item.get("DestinationStationName") or {}).get("Zh_tw", ""),
             "direction": item.get("Direction", 0),
-            "trip_id": item.get("TripID", ""),
+            "trip_head_sign": item.get("TripHeadSign", ""),
             "train_no": item.get("TrainNo", ""),
             "estimated_time": item.get("EstimateTime"),  # seconds
             "service_status": item.get("ServiceStatus", 0),
