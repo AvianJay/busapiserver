@@ -193,10 +193,14 @@ async def get_liveboard(system: str, line_id: str, request: Request):
         return cached
 
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(
-        f"/v2/Rail/Metro/LiveBoard/{system}",
-        params={"$filter": f"LineID eq '{line_id}'", "$format": "JSON"},
-    )
+    try:
+        raw = tdx.fetch_paginated_items(
+            f"/v2/Rail/Metro/LiveBoard/{system}",
+            params={"$filter": f"LineID eq '{line_id}'", "$format": "JSON"},
+        )
+    except Exception:
+        # Some metro systems (e.g. TMRT) don't support LiveBoard on TDX.
+        raw = []
 
     entries = []
     for item in raw:

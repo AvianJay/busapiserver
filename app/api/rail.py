@@ -434,11 +434,16 @@ def _parse_rail_alerts(raw: list[dict]) -> list[dict]:
         desc_raw = item.get("Description") or ""
         if isinstance(desc_raw, dict):
             desc_raw = desc_raw.get("Zh_tw") or desc_raw.get("En") or ""
+        raw_status = item.get("Status", 0)
+        try:
+            status_int = int(raw_status) if raw_status else 0
+        except (TypeError, ValueError):
+            status_int = 0
         alerts.append({
             "alert_id": item.get("AlertID", ""),
             "title": title_raw,
             "description": desc_raw,
-            "status": item.get("Status", 0),
+            "status": status_int,
             "scope": item.get("Scope", ""),
             "direction": item.get("Direction"),
             "publish_time": item.get("PublishTime", ""),
