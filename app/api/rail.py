@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import threading
 import time
 from dataclasses import dataclass, field
@@ -94,10 +95,9 @@ async def thsr_timetable_od(
         return cached
 
     tdx = _get_tdx(request)
-    if date:
-        path = f"/v2/Rail/THSR/DailyTimetable/OD/{origin}/to/{dest}/{date}"
-    else:
-        path = f"/v2/Rail/THSR/DailyTimetable/OD/{origin}/to/{dest}/today"
+    if not date:
+        date = datetime.date.today().isoformat()
+    path = f"/v2/Rail/THSR/DailyTimetable/OD/{origin}/to/{dest}/{date}"
     raw = tdx.fetch_paginated_items(path)
 
     trains = []
@@ -297,10 +297,9 @@ async def tra_timetable_od(
         return cached
 
     tdx = _get_tdx(request)
-    if date:
-        path = f"/v2/Rail/TRA/DailyTimetable/OD/{origin}/to/{dest}/{date}"
-    else:
-        path = f"/v2/Rail/TRA/DailyTimetable/OD/{origin}/to/{dest}/today"
+    if not date:
+        date = datetime.date.today().isoformat()
+    path = f"/v2/Rail/TRA/DailyTimetable/OD/{origin}/to/{dest}/{date}"
     raw = tdx.fetch_paginated_items(path)
 
     trains = []
