@@ -401,10 +401,17 @@ async def tra_alerts(request: Request):
 def _parse_rail_alerts(raw: list[dict]) -> list[dict]:
     alerts = []
     for item in raw:
+        # Title / Description may be plain strings or NameType dicts.
+        title_raw = item.get("Title") or ""
+        if isinstance(title_raw, dict):
+            title_raw = title_raw.get("Zh_tw") or title_raw.get("En") or ""
+        desc_raw = item.get("Description") or ""
+        if isinstance(desc_raw, dict):
+            desc_raw = desc_raw.get("Zh_tw") or desc_raw.get("En") or ""
         alerts.append({
             "alert_id": item.get("AlertID", ""),
-            "title": (item.get("Title") or ""),
-            "description": (item.get("Description") or ""),
+            "title": title_raw,
+            "description": desc_raw,
             "status": item.get("Status", 0),
             "scope": item.get("Scope", ""),
             "direction": item.get("Direction"),

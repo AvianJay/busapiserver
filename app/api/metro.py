@@ -80,9 +80,8 @@ async def get_lines(system: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/Line/City/{city}")
+    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/Line/{system}")
 
     lines = []
     for item in raw:
@@ -123,9 +122,8 @@ async def get_stations(system: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/Station/City/{city}")
+    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/Station/{system}")
 
     stations = []
     for item in raw:
@@ -156,9 +154,8 @@ async def get_station_of_line(system: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/StationOfLine/City/{city}")
+    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/StationOfLine/{system}")
 
     result = []
     for item in raw:
@@ -195,10 +192,9 @@ async def get_liveboard(system: str, line_id: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
     raw = tdx.fetch_paginated_items(
-        f"/v2/Rail/Metro/LiveBoard/City/{city}",
+        f"/v2/Rail/Metro/LiveBoard/{system}",
         params={"$filter": f"LineID eq '{line_id}'", "$format": "JSON"},
     )
 
@@ -233,10 +229,9 @@ async def get_shape(system: str, line_id: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
     raw = tdx.fetch_paginated_items(
-        f"/v2/Rail/Metro/Shape/City/{city}",
+        f"/v2/Rail/Metro/Shape/{system}",
         params={"$filter": f"LineID eq '{line_id}'", "$format": "JSON"},
     )
 
@@ -265,9 +260,8 @@ async def get_frequency(system: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/Frequency/City/{city}")
+    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/Frequency/{system}")
 
     result = []
     for item in raw:
@@ -304,9 +298,8 @@ async def get_s2s_traveltime(system: str, request: Request):
     if cached is not None:
         return cached
 
-    city = METRO_SYSTEMS[system]["city"]
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/S2STravelTime/City/{city}")
+    raw = tdx.fetch_paginated_items(f"/v2/Rail/Metro/S2STravelTime/{system}")
 
     result = []
     for item in raw:
