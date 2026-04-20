@@ -163,13 +163,18 @@ async def thsr_seats(station_id: str, request: Request):
         return cached
 
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items(
+    # TDX returns a single object {AvailableSeats: [...], UpdateTime: ...},
+    # not a paginated list, so we use _request_json directly.
+    payload = tdx._request_json(
         f"/v2/Rail/THSR/AvailableSeatStatusList/{station_id}",
+        params={"$format": "JSON"},
     )
+    available = []
+    if isinstance(payload, dict):
+        available = payload.get("AvailableSeats") or []
 
     result = []
-    for item in raw:
-        for train in item.get("AvailableSeats") or []:
+    for train in available:
             cars = []
             for car in train.get("StopStations") or []:
                 cars.append({
@@ -379,16 +384,38 @@ async def tra_shape(request: Request):
 
 @router.get("/tra/alerts")
 async def tra_alerts(request: Request):
-    """Get TRA operational alerts."""
+    """Get TRA operational alerts (derived from LiveTrainDelay)."""
     cache_key = "tra_alerts"
     cached = _get_cached(cache_key, REALTIME_CACHE_TTL)
     if cached is not None:
         return cached
 
     tdx = _get_tdx(request)
-    raw = tdx.fetch_paginated_items("/v2/Rail/TRA/AlertInfo")
+    raw = tdx.fetch_paginated_items("/v2/Rail/TRA/LiveTrainDelay")
 
-    alerts = _parse_rail_alerts(raw)
+    # Summarise delayed trains as alerts.
+    delayed = [d for d in raw if (d.get("DelayTime") or 0) > 0]
+    alerts = []
+    if delayed:
+        summary_lines = []
+        for d in delayed[:20]:  # cap at 20
+            name = (d.get("StationName") or {}).get("Zh_tw", "")
+            summary_lines.append(
+                f"車次 {d.get('TrainNo','')} 於 {name} 延誤 {d.get('DelayTime',0)} 分鐘"
+            )
+        alerts.append({
+            "alert_id": "tra_delay_summary",
+            "title": f"目前有 {len(delayed)} 班列車延誤",
+            "description": "\n".join(summary_lines),
+            "status": 0,
+            "scope": "",
+            "direction": None,
+            "publish_time": "",
+            "update_time": delayed[0].get("UpdateTime", "") if delayed else "",
+            "start_time": "",
+            "end_time": "",
+        })
+
     _set_cached(cache_key, alerts)
     return alerts
 
