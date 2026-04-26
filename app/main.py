@@ -12,6 +12,7 @@ from app.api.routes import router
 from app.api.metro import router as metro_router
 from app.api.rail import router as rail_router
 from app.api.bike import router as bike_router
+from app.api.inter import router as inter_router
 from app.config import get_settings
 from app.db import init_db, refresh_database_versions
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
@@ -147,3 +148,4 @@ app.include_router(router)
 app.include_router(metro_router)
 app.include_router(rail_router)
 app.include_router(bike_router)
+app.include_router(inter_router)

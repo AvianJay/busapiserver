@@ -90,6 +90,81 @@ CREATE TABLE IF NOT EXISTS route_schedules (
 
 CREATE INDEX IF NOT EXISTS idx_route_schedules_routeid ON route_schedules(routeid);
 
+CREATE TABLE IF NOT EXISTS inter_routes (
+    routeid         TEXT PRIMARY KEY,
+    route_uid       TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    name_en         TEXT,
+    departure       TEXT,
+    departure_en    TEXT,
+    destination     TEXT,
+    destination_en  TEXT,
+    operator_names  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS inter_paths (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    PRIMARY KEY (routeid, pathid),
+    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inter_stops (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    stopid      TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inter_path_points (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_inter_routes_name ON inter_routes(name);
+CREATE INDEX IF NOT EXISTS idx_inter_stops_routeid ON inter_stops(routeid);
+CREATE INDEX IF NOT EXISTS idx_inter_stops_stopid ON inter_stops(stopid);
+CREATE INDEX IF NOT EXISTS idx_inter_path_points_routeid ON inter_path_points(routeid);
+
+CREATE TABLE IF NOT EXISTS inter_route_operators (
+    routeid     TEXT NOT NULL,
+    operator_id TEXT NOT NULL,
+    seq         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (routeid, operator_id),
+    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE,
+    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_inter_route_operators_routeid ON inter_route_operators(routeid);
+CREATE INDEX IF NOT EXISTS idx_inter_route_operators_operator ON inter_route_operators(operator_id);
+
+CREATE TABLE IF NOT EXISTS inter_route_schedules (
+    routeid       TEXT NOT NULL,
+    subroute_uid  TEXT NOT NULL DEFAULT '',
+    direction     INTEGER NOT NULL DEFAULT 0,
+    kind          TEXT NOT NULL,
+    seq           INTEGER NOT NULL DEFAULT 0,
+    service_days  TEXT NOT NULL,
+    payload       TEXT NOT NULL,
+    PRIMARY KEY (routeid, subroute_uid, direction, kind, seq),
+    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_inter_route_schedules_routeid ON inter_route_schedules(routeid);
+
 CREATE TABLE IF NOT EXISTS tdx_fetch_state (
     resource_key    TEXT PRIMARY KEY,
     last_modified   TEXT,
@@ -133,6 +208,56 @@ CREATE TABLE IF NOT EXISTS paths (
 CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
 CREATE INDEX IF NOT EXISTS idx_routes_city_code ON routes(city_code);
 CREATE INDEX IF NOT EXISTS idx_paths_routeid ON paths(routeid);
+
+CREATE TABLE IF NOT EXISTS inter_routes (
+    routeid         TEXT PRIMARY KEY,
+    route_uid       TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    name_en         TEXT,
+    departure       TEXT,
+    departure_en    TEXT,
+    destination     TEXT,
+    destination_en  TEXT,
+    operator_names  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS inter_paths (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    PRIMARY KEY (routeid, pathid),
+    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inter_stops (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    stopid      TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inter_path_points (
+    routeid     TEXT NOT NULL,
+    pathid      INTEGER NOT NULL,
+    seq         INTEGER NOT NULL,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (routeid, pathid, seq),
+    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_inter_routes_name ON inter_routes(name);
+CREATE INDEX IF NOT EXISTS idx_inter_paths_routeid ON inter_paths(routeid);
+CREATE INDEX IF NOT EXISTS idx_inter_stops_routeid ON inter_stops(routeid);
+CREATE INDEX IF NOT EXISTS idx_inter_stops_stopid ON inter_stops(stopid);
+CREATE INDEX IF NOT EXISTS idx_inter_path_points_routeid ON inter_path_points(routeid);
 """
 
 CITY_SCHEMA_SQL = """
@@ -290,6 +415,114 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                 for row in paths
             ],
         )
+        inter_routes = source_connection.execute(
+            """
+            SELECT
+                routeid,
+                route_uid,
+                name,
+                name_en,
+                departure,
+                departure_en,
+                destination,
+                destination_en,
+                COALESCE(operator_names, '') AS operator_names
+            FROM inter_routes
+            ORDER BY routeid
+            """
+        ).fetchall()
+        target_connection.executemany(
+            """
+            INSERT INTO inter_routes
+                (routeid, route_uid, name, name_en, departure, departure_en, destination, destination_en, operator_names)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["route_uid"],
+                    row["name"],
+                    row["name_en"],
+                    row["departure"],
+                    row["departure_en"],
+                    row["destination"],
+                    row["destination_en"],
+                    row["operator_names"],
+                )
+                for row in inter_routes
+            ],
+        )
+        inter_paths = source_connection.execute(
+            """
+            SELECT routeid, pathid, name, name_en
+            FROM inter_paths
+            ORDER BY routeid, pathid
+            """
+        ).fetchall()
+        target_connection.executemany(
+            """
+            INSERT INTO inter_paths (routeid, pathid, name, name_en)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["name"],
+                    row["name_en"],
+                )
+                for row in inter_paths
+            ],
+        )
+        inter_stops = source_connection.execute(
+            """
+            SELECT routeid, pathid, seq, stopid, name, name_en, lat, lon
+            FROM inter_stops
+            ORDER BY routeid, pathid, seq
+            """
+        ).fetchall()
+        target_connection.executemany(
+            """
+            INSERT INTO inter_stops (routeid, pathid, seq, stopid, name, name_en, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["seq"],
+                    row["stopid"],
+                    row["name"],
+                    row["name_en"],
+                    row["lat"],
+                    row["lon"],
+                )
+                for row in inter_stops
+            ],
+        )
+        inter_path_points = source_connection.execute(
+            """
+            SELECT routeid, pathid, seq, lat, lon
+            FROM inter_path_points
+            ORDER BY routeid, pathid, seq
+            """
+        ).fetchall()
+        target_connection.executemany(
+            """
+            INSERT INTO inter_path_points (routeid, pathid, seq, lat, lon)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["seq"],
+                    row["lat"],
+                    row["lon"],
+                )
+                for row in inter_path_points
+            ],
+        )
         target_connection.commit()
 
     temp_path.replace(target_path)
@@ -302,21 +535,52 @@ def delete_main_routes_by_prefix(connection: sqlite3.Connection, prefix: str) ->
     )
 
 
+def clear_inter_db(connection: sqlite3.Connection) -> None:
+    connection.execute("DELETE FROM inter_routes")
+
+
 def clear_city_db(connection: sqlite3.Connection) -> None:
     connection.execute("DELETE FROM stops")
 
 
 def route_exists(connection: sqlite3.Connection, routeid: str) -> bool:
+    return _route_exists_in_table(connection, routeid, routes_table="routes")
+
+
+def inter_route_exists(connection: sqlite3.Connection, routeid: str) -> bool:
+    return _route_exists_in_table(connection, routeid, routes_table="inter_routes")
+
+
+def _route_exists_in_table(
+    connection: sqlite3.Connection,
+    routeid: str,
+    *,
+    routes_table: str,
+) -> bool:
     row = connection.execute(
-        "SELECT 1 FROM routes WHERE routeid = ? LIMIT 1",
+        f"SELECT 1 FROM {routes_table} WHERE routeid = ? LIMIT 1",
         (routeid,),
     ).fetchone()
     return row is not None
 
 
 def path_exists(connection: sqlite3.Connection, routeid: str, pathid: int) -> bool:
+    return _path_exists_in_table(connection, routeid, pathid, paths_table="paths")
+
+
+def inter_path_exists(connection: sqlite3.Connection, routeid: str, pathid: int) -> bool:
+    return _path_exists_in_table(connection, routeid, pathid, paths_table="inter_paths")
+
+
+def _path_exists_in_table(
+    connection: sqlite3.Connection,
+    routeid: str,
+    pathid: int,
+    *,
+    paths_table: str,
+) -> bool:
     row = connection.execute(
-        "SELECT 1 FROM paths WHERE routeid = ? AND pathid = ? LIMIT 1",
+        f"SELECT 1 FROM {paths_table} WHERE routeid = ? AND pathid = ? LIMIT 1",
         (routeid, pathid),
     ).fetchone()
     return row is not None
@@ -327,10 +591,38 @@ def load_path_points(
     routeid: str,
     pathid: int,
 ) -> list[tuple[float, float]]:
+    return _load_path_points_from_table(
+        connection,
+        routeid,
+        pathid,
+        path_points_table="path_points",
+    )
+
+
+def load_inter_path_points(
+    connection: sqlite3.Connection,
+    routeid: str,
+    pathid: int,
+) -> list[tuple[float, float]]:
+    return _load_path_points_from_table(
+        connection,
+        routeid,
+        pathid,
+        path_points_table="inter_path_points",
+    )
+
+
+def _load_path_points_from_table(
+    connection: sqlite3.Connection,
+    routeid: str,
+    pathid: int,
+    *,
+    path_points_table: str,
+) -> list[tuple[float, float]]:
     rows = connection.execute(
-        """
+        f"""
         SELECT lat, lon
-        FROM path_points
+        FROM {path_points_table}
         WHERE routeid = ? AND pathid = ?
         ORDER BY seq
         """,
@@ -340,17 +632,44 @@ def load_path_points(
 
 
 def load_route_static(connection: sqlite3.Connection, routeid: str) -> dict | None:
+    return _load_route_static_from_tables(
+        connection,
+        routeid,
+        routes_table="routes",
+        paths_table="paths",
+        stops_table="stops",
+    )
+
+
+def load_inter_route_static(connection: sqlite3.Connection, routeid: str) -> dict | None:
+    return _load_route_static_from_tables(
+        connection,
+        routeid,
+        routes_table="inter_routes",
+        paths_table="inter_paths",
+        stops_table="inter_stops",
+    )
+
+
+def _load_route_static_from_tables(
+    connection: sqlite3.Connection,
+    routeid: str,
+    *,
+    routes_table: str,
+    paths_table: str,
+    stops_table: str,
+) -> dict | None:
     route_row = connection.execute(
-        "SELECT routeid, name, name_en FROM routes WHERE routeid = ?",
+        f"SELECT routeid, name, name_en FROM {routes_table} WHERE routeid = ?",
         (routeid,),
     ).fetchone()
     if route_row is None:
         return None
 
     path_rows = connection.execute(
-        """
+        f"""
         SELECT pathid, name, name_en
-        FROM paths
+        FROM {paths_table}
         WHERE routeid = ?
         ORDER BY pathid
         """,
@@ -358,9 +677,9 @@ def load_route_static(connection: sqlite3.Connection, routeid: str) -> dict | No
     ).fetchall()
 
     stop_rows = connection.execute(
-        """
+        f"""
         SELECT pathid, seq, stopid, name, name_en, lat, lon
-        FROM stops
+        FROM {stops_table}
         WHERE routeid = ?
         ORDER BY pathid, seq
         """,
@@ -548,9 +867,26 @@ def refresh_database_versions(
                 "operators",
                 "route_operators",
                 "route_schedules",
+                "inter_routes",
+                "inter_paths",
+                "inter_stops",
+                "inter_path_points",
+                "inter_route_operators",
+                "inter_route_schedules",
             ),
         ),
-        ("download", Path(download_db_path), ("routes", "paths")),
+        (
+            "download",
+            Path(download_db_path),
+            (
+                "routes",
+                "paths",
+                "inter_routes",
+                "inter_paths",
+                "inter_stops",
+                "inter_path_points",
+            ),
+        ),
     ]
     for city_name, city_path in sorted(city_db_paths.items()):
         entries.append((city_name, Path(city_path), ("stops",)))
