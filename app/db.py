@@ -90,81 +90,6 @@ CREATE TABLE IF NOT EXISTS route_schedules (
 
 CREATE INDEX IF NOT EXISTS idx_route_schedules_routeid ON route_schedules(routeid);
 
-CREATE TABLE IF NOT EXISTS inter_routes (
-    routeid         TEXT PRIMARY KEY,
-    route_uid       TEXT NOT NULL,
-    name            TEXT NOT NULL,
-    name_en         TEXT,
-    departure       TEXT,
-    departure_en    TEXT,
-    destination     TEXT,
-    destination_en  TEXT,
-    operator_names  TEXT
-);
-
-CREATE TABLE IF NOT EXISTS inter_paths (
-    routeid     TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    name        TEXT NOT NULL,
-    name_en     TEXT,
-    PRIMARY KEY (routeid, pathid),
-    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS inter_stops (
-    routeid     TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    seq         INTEGER NOT NULL,
-    stopid      TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    name_en     TEXT,
-    lat         REAL NOT NULL,
-    lon         REAL NOT NULL,
-    PRIMARY KEY (routeid, pathid, seq),
-    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS inter_path_points (
-    routeid     TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    seq         INTEGER NOT NULL,
-    lat         REAL NOT NULL,
-    lon         REAL NOT NULL,
-    PRIMARY KEY (routeid, pathid, seq),
-    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_inter_routes_name ON inter_routes(name);
-CREATE INDEX IF NOT EXISTS idx_inter_stops_routeid ON inter_stops(routeid);
-CREATE INDEX IF NOT EXISTS idx_inter_stops_stopid ON inter_stops(stopid);
-CREATE INDEX IF NOT EXISTS idx_inter_path_points_routeid ON inter_path_points(routeid);
-
-CREATE TABLE IF NOT EXISTS inter_route_operators (
-    routeid     TEXT NOT NULL,
-    operator_id TEXT NOT NULL,
-    seq         INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (routeid, operator_id),
-    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE,
-    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_inter_route_operators_routeid ON inter_route_operators(routeid);
-CREATE INDEX IF NOT EXISTS idx_inter_route_operators_operator ON inter_route_operators(operator_id);
-
-CREATE TABLE IF NOT EXISTS inter_route_schedules (
-    routeid       TEXT NOT NULL,
-    subroute_uid  TEXT NOT NULL DEFAULT '',
-    direction     INTEGER NOT NULL DEFAULT 0,
-    kind          TEXT NOT NULL,
-    seq           INTEGER NOT NULL DEFAULT 0,
-    service_days  TEXT NOT NULL,
-    payload       TEXT NOT NULL,
-    PRIMARY KEY (routeid, subroute_uid, direction, kind, seq),
-    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_inter_route_schedules_routeid ON inter_route_schedules(routeid);
-
 CREATE TABLE IF NOT EXISTS tdx_fetch_state (
     resource_key    TEXT PRIMARY KEY,
     last_modified   TEXT,
@@ -208,56 +133,6 @@ CREATE TABLE IF NOT EXISTS paths (
 CREATE INDEX IF NOT EXISTS idx_routes_name ON routes(name);
 CREATE INDEX IF NOT EXISTS idx_routes_city_code ON routes(city_code);
 CREATE INDEX IF NOT EXISTS idx_paths_routeid ON paths(routeid);
-
-CREATE TABLE IF NOT EXISTS inter_routes (
-    routeid         TEXT PRIMARY KEY,
-    route_uid       TEXT NOT NULL,
-    name            TEXT NOT NULL,
-    name_en         TEXT,
-    departure       TEXT,
-    departure_en    TEXT,
-    destination     TEXT,
-    destination_en  TEXT,
-    operator_names  TEXT
-);
-
-CREATE TABLE IF NOT EXISTS inter_paths (
-    routeid     TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    name        TEXT NOT NULL,
-    name_en     TEXT,
-    PRIMARY KEY (routeid, pathid),
-    FOREIGN KEY (routeid) REFERENCES inter_routes(routeid) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS inter_stops (
-    routeid     TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    seq         INTEGER NOT NULL,
-    stopid      TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    name_en     TEXT,
-    lat         REAL NOT NULL,
-    lon         REAL NOT NULL,
-    PRIMARY KEY (routeid, pathid, seq),
-    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS inter_path_points (
-    routeid     TEXT NOT NULL,
-    pathid      INTEGER NOT NULL,
-    seq         INTEGER NOT NULL,
-    lat         REAL NOT NULL,
-    lon         REAL NOT NULL,
-    PRIMARY KEY (routeid, pathid, seq),
-    FOREIGN KEY (routeid, pathid) REFERENCES inter_paths(routeid, pathid) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_inter_routes_name ON inter_routes(name);
-CREATE INDEX IF NOT EXISTS idx_inter_paths_routeid ON inter_paths(routeid);
-CREATE INDEX IF NOT EXISTS idx_inter_stops_routeid ON inter_stops(routeid);
-CREATE INDEX IF NOT EXISTS idx_inter_stops_stopid ON inter_stops(stopid);
-CREATE INDEX IF NOT EXISTS idx_inter_path_points_routeid ON inter_path_points(routeid);
 """
 
 CITY_SCHEMA_SQL = """
@@ -301,8 +176,22 @@ def get_connection(db_path: str | Path) -> Iterator[sqlite3.Connection]:
 def init_db(db_path: str | Path) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with get_connection(db_path) as connection:
+        _drop_legacy_inter_tables(connection)
         connection.executescript(MAIN_SCHEMA_SQL)
         connection.commit()
+
+
+def _drop_legacy_inter_tables(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        DROP TABLE IF EXISTS inter_route_schedules;
+        DROP TABLE IF EXISTS inter_route_operators;
+        DROP TABLE IF EXISTS inter_path_points;
+        DROP TABLE IF EXISTS inter_stops;
+        DROP TABLE IF EXISTS inter_paths;
+        DROP TABLE IF EXISTS inter_routes;
+        """
+    )
 
 
 def init_city_db(db_path: str | Path) -> None:
@@ -413,114 +302,6 @@ def export_download_db(source_db_path: str | Path, target_db_path: str | Path) -
                     row["name_en"],
                 )
                 for row in paths
-            ],
-        )
-        inter_routes = source_connection.execute(
-            """
-            SELECT
-                routeid,
-                route_uid,
-                name,
-                name_en,
-                departure,
-                departure_en,
-                destination,
-                destination_en,
-                COALESCE(operator_names, '') AS operator_names
-            FROM inter_routes
-            ORDER BY routeid
-            """
-        ).fetchall()
-        target_connection.executemany(
-            """
-            INSERT INTO inter_routes
-                (routeid, route_uid, name, name_en, departure, departure_en, destination, destination_en, operator_names)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["routeid"],
-                    row["route_uid"],
-                    row["name"],
-                    row["name_en"],
-                    row["departure"],
-                    row["departure_en"],
-                    row["destination"],
-                    row["destination_en"],
-                    row["operator_names"],
-                )
-                for row in inter_routes
-            ],
-        )
-        inter_paths = source_connection.execute(
-            """
-            SELECT routeid, pathid, name, name_en
-            FROM inter_paths
-            ORDER BY routeid, pathid
-            """
-        ).fetchall()
-        target_connection.executemany(
-            """
-            INSERT INTO inter_paths (routeid, pathid, name, name_en)
-            VALUES (?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["routeid"],
-                    row["pathid"],
-                    row["name"],
-                    row["name_en"],
-                )
-                for row in inter_paths
-            ],
-        )
-        inter_stops = source_connection.execute(
-            """
-            SELECT routeid, pathid, seq, stopid, name, name_en, lat, lon
-            FROM inter_stops
-            ORDER BY routeid, pathid, seq
-            """
-        ).fetchall()
-        target_connection.executemany(
-            """
-            INSERT INTO inter_stops (routeid, pathid, seq, stopid, name, name_en, lat, lon)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["routeid"],
-                    row["pathid"],
-                    row["seq"],
-                    row["stopid"],
-                    row["name"],
-                    row["name_en"],
-                    row["lat"],
-                    row["lon"],
-                )
-                for row in inter_stops
-            ],
-        )
-        inter_path_points = source_connection.execute(
-            """
-            SELECT routeid, pathid, seq, lat, lon
-            FROM inter_path_points
-            ORDER BY routeid, pathid, seq
-            """
-        ).fetchall()
-        target_connection.executemany(
-            """
-            INSERT INTO inter_path_points (routeid, pathid, seq, lat, lon)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["routeid"],
-                    row["pathid"],
-                    row["seq"],
-                    row["lat"],
-                    row["lon"],
-                )
-                for row in inter_path_points
             ],
         )
         target_connection.commit()
@@ -867,12 +648,6 @@ def refresh_database_versions(
                 "operators",
                 "route_operators",
                 "route_schedules",
-                "inter_routes",
-                "inter_paths",
-                "inter_stops",
-                "inter_path_points",
-                "inter_route_operators",
-                "inter_route_schedules",
             ),
         ),
         (
@@ -881,10 +656,6 @@ def refresh_database_versions(
             (
                 "routes",
                 "paths",
-                "inter_routes",
-                "inter_paths",
-                "inter_stops",
-                "inter_path_points",
             ),
         ),
     ]

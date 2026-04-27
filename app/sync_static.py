@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from contextlib import ExitStack
 import json
 import re
 import time
@@ -17,7 +18,6 @@ from app.config import (
     to_intercity_routeid,
 )
 from app.db import (
-    clear_inter_db,
     clear_city_db,
     delete_main_routes_by_prefix,
     export_download_db,
@@ -445,68 +445,12 @@ def _replace_city_route(connection, route: StaticRoute) -> None:
             )
 
 
-def _replace_inter_route(connection, route: StaticRoute) -> None:
-    connection.execute(
-        """
-        INSERT OR REPLACE INTO inter_routes
-            (routeid, route_uid, name, name_en, departure, departure_en, destination, destination_en, operator_names)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            route.routeid,
-            route.route_uid or route.routeid,
-            route.name,
-            route.name_en,
-            route.departure,
-            route.departure_en,
-            route.destination,
-            route.destination_en,
-            " / ".join(route.operator_names),
-        ),
-    )
-    connection.execute("DELETE FROM inter_paths WHERE routeid = ?", (route.routeid,))
-
-    for path in sorted(route.paths.values(), key=lambda item: item.pathid):
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO inter_paths (routeid, pathid, name, name_en)
-            VALUES (?, ?, ?, ?)
-            """,
-            (route.routeid, path.pathid, path.name, path.name_en),
-        )
-
-        for stop in sorted(path.stops, key=lambda item: item.seq):
-            connection.execute(
-                """
-                INSERT OR REPLACE INTO inter_stops
-                (routeid, pathid, seq, stopid, name, name_en, lat, lon)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    route.routeid,
-                    path.pathid,
-                    stop.seq,
-                    stop.stopid,
-                    stop.name,
-                    stop.name_en,
-                    stop.lat,
-                    stop.lon,
-                ),
-            )
-
-        for seq, (lat, lon) in enumerate(path.points, start=1):
-            connection.execute(
-                """
-                INSERT OR REPLACE INTO inter_path_points
-                (routeid, pathid, seq, lat, lon)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (route.routeid, path.pathid, seq, lat, lon),
-            )
-
-
 def _city_temp_db_path(city_db_path: Path) -> Path:
     return city_db_path.with_suffix(f"{city_db_path.suffix}.tmp")
+
+
+def _main_temp_db_path(db_path: Path) -> Path:
+    return db_path.with_suffix(f"{db_path.suffix}.tmp")
 
 
 def _should_use_terminal_stop_name(path_name: str | None, route_name: str | None) -> bool:
@@ -542,6 +486,324 @@ def _normalize_path_names_from_stops(static_routes: dict[str, StaticRoute]) -> N
 
 def _resource_key(city: str, resource: str) -> str:
     return f"static:{city}:{resource}"
+
+
+def _copy_database_versions(source_connection, target_connection) -> None:
+    rows = source_connection.execute(
+        "SELECT name, version, content_hash, updated_at FROM database_versions ORDER BY name"
+    ).fetchall()
+    if not rows:
+        return
+    target_connection.executemany(
+        """
+        INSERT OR REPLACE INTO database_versions (name, version, content_hash, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        [
+            (
+                row["name"],
+                row["version"],
+                row["content_hash"],
+                row["updated_at"],
+            )
+            for row in rows
+        ],
+    )
+
+
+def _copy_fetch_state_rows(source_connection, target_connection, where_clause: str = "", parameters: tuple = ()) -> None:
+    rows = source_connection.execute(
+        f"""
+        SELECT resource_key, last_modified, last_status, last_checked_at, last_updated_at
+        FROM tdx_fetch_state
+        {where_clause}
+        ORDER BY resource_key
+        """,
+        parameters,
+    ).fetchall()
+    if not rows:
+        return
+    target_connection.executemany(
+        """
+        INSERT OR REPLACE INTO tdx_fetch_state
+            (resource_key, last_modified, last_status, last_checked_at, last_updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                row["resource_key"],
+                row["last_modified"],
+                row["last_status"],
+                row["last_checked_at"],
+                row["last_updated_at"],
+            )
+            for row in rows
+        ],
+    )
+
+
+def _copy_non_static_fetch_state(source_connection, target_connection) -> None:
+    _copy_fetch_state_rows(
+        source_connection,
+        target_connection,
+        "WHERE resource_key NOT LIKE 'static:%'",
+    )
+
+
+def _copy_static_fetch_state_for_city(source_connection, target_connection, city: str) -> None:
+    _copy_fetch_state_rows(
+        source_connection,
+        target_connection,
+        "WHERE resource_key LIKE ?",
+        (f"static:{city}:%",),
+    )
+
+
+def _copy_main_routes_by_prefix(source_connection, target_connection, prefix: str) -> int:
+    route_pattern = f"{prefix}%"
+    route_rows = source_connection.execute(
+        """
+        SELECT routeid, name, name_en
+        FROM routes
+        WHERE routeid LIKE ?
+        ORDER BY routeid
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if not route_rows:
+        return 0
+
+    target_connection.executemany(
+        """
+        INSERT OR REPLACE INTO routes (routeid, name, name_en)
+        VALUES (?, ?, ?)
+        """,
+        [
+            (
+                row["routeid"],
+                row["name"],
+                row["name_en"],
+            )
+            for row in route_rows
+        ],
+    )
+
+    path_rows = source_connection.execute(
+        """
+        SELECT routeid, pathid, name, name_en
+        FROM paths
+        WHERE routeid LIKE ?
+        ORDER BY routeid, pathid
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if path_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO paths (routeid, pathid, name, name_en)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["name"],
+                    row["name_en"],
+                )
+                for row in path_rows
+            ],
+        )
+
+    stop_rows = source_connection.execute(
+        """
+        SELECT routeid, pathid, seq, stopid, name, name_en, lat, lon
+        FROM stops
+        WHERE routeid LIKE ?
+        ORDER BY routeid, pathid, seq
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if stop_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO stops
+                (routeid, pathid, seq, stopid, name, name_en, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["seq"],
+                    row["stopid"],
+                    row["name"],
+                    row["name_en"],
+                    row["lat"],
+                    row["lon"],
+                )
+                for row in stop_rows
+            ],
+        )
+
+    point_rows = source_connection.execute(
+        """
+        SELECT routeid, pathid, seq, lat, lon
+        FROM path_points
+        WHERE routeid LIKE ?
+        ORDER BY routeid, pathid, seq
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if point_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO path_points (routeid, pathid, seq, lat, lon)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["pathid"],
+                    row["seq"],
+                    row["lat"],
+                    row["lon"],
+                )
+                for row in point_rows
+            ],
+        )
+
+    operator_rows = source_connection.execute(
+        """
+        SELECT DISTINCT o.operator_id, o.name, o.name_en, o.code, o.phone, o.email, o.url
+        FROM operators o
+        JOIN route_operators ro ON ro.operator_id = o.operator_id
+        WHERE ro.routeid LIKE ?
+        ORDER BY o.operator_id
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if operator_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO operators
+                (operator_id, name, name_en, code, phone, email, url)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["operator_id"],
+                    row["name"],
+                    row["name_en"],
+                    row["code"],
+                    row["phone"],
+                    row["email"],
+                    row["url"],
+                )
+                for row in operator_rows
+            ],
+        )
+
+    route_operator_rows = source_connection.execute(
+        """
+        SELECT routeid, operator_id, seq
+        FROM route_operators
+        WHERE routeid LIKE ?
+        ORDER BY routeid, seq, operator_id
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if route_operator_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO route_operators (routeid, operator_id, seq)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["operator_id"],
+                    row["seq"],
+                )
+                for row in route_operator_rows
+            ],
+        )
+
+    schedule_rows = source_connection.execute(
+        """
+        SELECT routeid, subroute_uid, direction, kind, seq, service_days, payload
+        FROM route_schedules
+        WHERE routeid LIKE ?
+        ORDER BY routeid, subroute_uid, direction, kind, seq
+        """,
+        (route_pattern,),
+    ).fetchall()
+    if schedule_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO route_schedules
+                (routeid, subroute_uid, direction, kind, seq, service_days, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["routeid"],
+                    row["subroute_uid"],
+                    row["direction"],
+                    row["kind"],
+                    row["seq"],
+                    row["service_days"],
+                    row["payload"],
+                )
+                for row in schedule_rows
+            ],
+        )
+
+    return len(route_rows)
+
+
+def _write_city_db_from_main(connection, city_db_path: Path, prefix: str) -> None:
+    temp_city_db_path = _city_temp_db_path(city_db_path)
+    if temp_city_db_path.exists():
+        temp_city_db_path.unlink()
+    init_city_db(temp_city_db_path)
+
+    stop_rows = connection.execute(
+        """
+        SELECT routeid, pathid, seq, stopid, name, name_en, lat, lon
+        FROM stops
+        WHERE routeid LIKE ?
+        ORDER BY routeid, pathid, seq
+        """,
+        (f"{prefix}%",),
+    ).fetchall()
+
+    with get_connection(temp_city_db_path) as city_connection:
+        with city_connection:
+            clear_city_db(city_connection)
+            if stop_rows:
+                city_connection.executemany(
+                    """
+                    INSERT OR REPLACE INTO stops
+                        (routeid, pathid, seq, stopid, name, name_en, lat, lon)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            row["routeid"],
+                            row["pathid"],
+                            row["seq"],
+                            row["stopid"],
+                            row["name"],
+                            row["name_en"],
+                            row["lat"],
+                            row["lon"],
+                        )
+                        for row in stop_rows
+                    ],
+                )
+
+    city_db_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_city_db_path.replace(city_db_path)
 
 
 def _upsert_operators(connection, operators_raw: list[dict]) -> None:
@@ -709,20 +971,54 @@ def sync_static(
     force: bool = False,
 ) -> None:
     settings.require_tdx_credentials()
-    init_db(settings.db_path)
+
+    main_db_path = settings.db_path
+    had_existing_main = main_db_path.exists()
+    if had_existing_main:
+        init_db(main_db_path)
+
+    temp_main_db_path = _main_temp_db_path(main_db_path)
+    if temp_main_db_path.exists():
+        temp_main_db_path.unlink()
+    init_db(temp_main_db_path)
 
     effective_cities = cities or settings.tdx_cities
     token_manager = TDXTokenManager(settings)
     client = TDXClient(settings, token_manager)
 
     try:
-        with get_connection(settings.db_path) as connection:
+        with ExitStack() as stack:
+            source_connection = (
+                stack.enter_context(get_connection(main_db_path))
+                if had_existing_main
+                else None
+            )
+            connection = stack.enter_context(get_connection(temp_main_db_path))
+
+            if source_connection is not None:
+                with connection:
+                    _copy_non_static_fetch_state(source_connection, connection)
+                    _copy_database_versions(source_connection, connection)
+
+            processed_cities: set[str] = set()
+            processed_prefixes: set[str] = {INTERCITY_PREFIX}
+
             for city in effective_cities:
                 LOGGER.info("syncing city=%s", city)
+                processed_cities.add(city)
 
-                routes_state = load_tdx_fetch_state(connection, _resource_key(city, "routes"))
-                stops_state = load_tdx_fetch_state(connection, _resource_key(city, "stop_of_route"))
-                shapes_state = load_tdx_fetch_state(connection, _resource_key(city, "shapes"))
+                routes_state = None if source_connection is None else load_tdx_fetch_state(
+                    source_connection,
+                    _resource_key(city, "routes"),
+                )
+                stops_state = None if source_connection is None else load_tdx_fetch_state(
+                    source_connection,
+                    _resource_key(city, "stop_of_route"),
+                )
+                shapes_state = None if source_connection is None else load_tdx_fetch_state(
+                    source_connection,
+                    _resource_key(city, "shapes"),
+                )
 
                 routes_response = client.fetch_paginated_items_conditional(
                     f"/v2/Bus/Route/City/{city}",
@@ -753,8 +1049,48 @@ def sync_static(
                     and stops_response.not_modified
                     and shapes_response.not_modified
                 ):
-                    LOGGER.info("city=%s no static updates (all resources returned 304)", city)
-                    continue
+                    prefix = CITY_NAME_TO_PREFIX.get(city)
+                    copied_routes = 0
+                    if prefix and source_connection is not None:
+                        processed_prefixes.add(prefix)
+                        with connection:
+                            copied_routes = _copy_main_routes_by_prefix(
+                                source_connection,
+                                connection,
+                                prefix,
+                            )
+                    if prefix and copied_routes > 0:
+                        _write_city_db_from_main(
+                            connection,
+                            settings.city_db_path(city),
+                            prefix,
+                        )
+                        LOGGER.info(
+                            "city=%s reused previous static data after 304",
+                            city,
+                        )
+                        continue
+
+                    LOGGER.warning(
+                        "city=%s returned 304 but no previous rows were available; forcing full refetch",
+                        city,
+                    )
+                    routes_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/Route/City/{city}",
+                        if_modified_since=None,
+                    )
+                    stops_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/StopOfRoute/City/{city}",
+                        if_modified_since=None,
+                    )
+                    shapes_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/Shape/City/{city}",
+                        if_modified_since=None,
+                    )
+                    checked_at = int(time.time())
+                    _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
+                    _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
+                    _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
 
                 if routes_response.not_modified:
                     routes_response = client.fetch_paginated_items_conditional(
@@ -784,6 +1120,7 @@ def sync_static(
 
                 prefix = CITY_NAME_TO_PREFIX.get(city)
                 if prefix:
+                    processed_prefixes.add(prefix)
                     with connection:
                         delete_main_routes_by_prefix(connection, prefix)
                         for route in static_routes.values():
@@ -828,18 +1165,13 @@ def sync_static(
                             table_name="route_schedules",
                         )
 
+                if prefix:
+                    _write_city_db_from_main(
+                        connection,
+                        settings.city_db_path(city),
+                        prefix,
+                    )
                 city_db_path = settings.city_db_path(city)
-                temp_city_db_path = _city_temp_db_path(city_db_path)
-                if temp_city_db_path.exists():
-                    temp_city_db_path.unlink()
-                init_city_db(temp_city_db_path)
-                with get_connection(temp_city_db_path) as city_connection:
-                    with city_connection:
-                        clear_city_db(city_connection)
-                        for route in static_routes.values():
-                            _replace_city_route(city_connection, route)
-                city_db_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_city_db_path.replace(city_db_path)
 
                 LOGGER.info(
                     "city=%s routes=%s stop_of_route=%s shapes=%s city_db=%s "
@@ -857,9 +1189,18 @@ def sync_static(
             inter_name = INTERCITY_CITY_NAME
             LOGGER.info("syncing intercity")
 
-            inter_routes_state = load_tdx_fetch_state(connection, _resource_key(inter_name, "routes"))
-            inter_stops_state = load_tdx_fetch_state(connection, _resource_key(inter_name, "stop_of_route"))
-            inter_shapes_state = load_tdx_fetch_state(connection, _resource_key(inter_name, "shapes"))
+            inter_routes_state = None if source_connection is None else load_tdx_fetch_state(
+                source_connection,
+                _resource_key(inter_name, "routes"),
+            )
+            inter_stops_state = None if source_connection is None else load_tdx_fetch_state(
+                source_connection,
+                _resource_key(inter_name, "stop_of_route"),
+            )
+            inter_shapes_state = None if source_connection is None else load_tdx_fetch_state(
+                source_connection,
+                _resource_key(inter_name, "shapes"),
+            )
 
             inter_routes_response = client.fetch_paginated_items_conditional(
                 "/v2/Bus/Route/InterCity",
@@ -890,8 +1231,42 @@ def sync_static(
                 and inter_stops_response.not_modified
                 and inter_shapes_response.not_modified
             ):
-                LOGGER.info("intercity no static updates (all resources returned 304)")
-            else:
+                copied_routes = 0
+                if source_connection is not None:
+                    with connection:
+                        copied_routes = _copy_main_routes_by_prefix(
+                            source_connection,
+                            connection,
+                            INTERCITY_PREFIX,
+                        )
+                if copied_routes > 0:
+                    LOGGER.info("intercity reused previous static data after 304")
+                else:
+                    LOGGER.warning(
+                        "intercity returned 304 but no previous rows were available; forcing full refetch",
+                    )
+                    inter_routes_response = client.fetch_paginated_items_conditional(
+                        "/v2/Bus/Route/InterCity",
+                        if_modified_since=None,
+                    )
+                    inter_stops_response = client.fetch_paginated_items_conditional(
+                        "/v2/Bus/StopOfRoute/InterCity",
+                        if_modified_since=None,
+                    )
+                    inter_shapes_response = client.fetch_paginated_items_conditional(
+                        "/v2/Bus/Shape/InterCity",
+                        if_modified_since=None,
+                    )
+                    checked_at = int(time.time())
+                    _persist_fetch_state(connection, inter_name, "routes", inter_routes_response, checked_at, inter_routes_state)
+                    _persist_fetch_state(connection, inter_name, "stop_of_route", inter_stops_response, checked_at, inter_stops_state)
+                    _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
+
+            if not (
+                inter_routes_response.not_modified
+                and inter_stops_response.not_modified
+                and inter_shapes_response.not_modified
+            ):
                 if inter_routes_response.not_modified:
                     inter_routes_response = client.fetch_paginated_items_conditional(
                         "/v2/Bus/Route/InterCity",
@@ -926,14 +1301,9 @@ def sync_static(
                 inter_schedules_raw = client.fetch_paginated_items("/v2/Bus/Schedule/InterCity")
 
                 with connection:
-                    clear_inter_db(connection)
                     delete_main_routes_by_prefix(connection, INTERCITY_PREFIX)
-                    for route in inter_static_routes.values():
-                        _replace_inter_route(connection, route)
                     for route in merged_inter_routes.values():
                         _replace_main_route(connection, route)
-                    connection.execute("DELETE FROM inter_route_operators")
-                    connection.execute("DELETE FROM inter_route_schedules")
                     connection.execute(
                         "DELETE FROM route_operators WHERE routeid LIKE ?",
                         (f"{INTERCITY_PREFIX}%",),
@@ -943,18 +1313,6 @@ def sync_static(
                         (f"{INTERCITY_PREFIX}%",),
                     )
                     _upsert_operators(connection, inter_operators_raw)
-                    _sync_route_operator_links(
-                        connection,
-                        inter_routes_raw,
-                        set(inter_static_routes),
-                        table_name="inter_route_operators",
-                    )
-                    _sync_route_schedules(
-                        connection,
-                        inter_schedules_raw,
-                        set(inter_static_routes),
-                        table_name="inter_route_schedules",
-                    )
                     _sync_route_operator_links(
                         connection,
                         inter_routes_raw,
@@ -970,38 +1328,54 @@ def sync_static(
                         routeid_mapper=to_intercity_routeid,
                     )
 
-                inter_city_db_path = settings.city_db_path(inter_name)
-                temp_inter_city_db_path = _city_temp_db_path(inter_city_db_path)
-                if temp_inter_city_db_path.exists():
-                    temp_inter_city_db_path.unlink()
-                init_city_db(temp_inter_city_db_path)
-                with get_connection(temp_inter_city_db_path) as inter_city_connection:
-                    with inter_city_connection:
-                        clear_city_db(inter_city_connection)
-                        for route in merged_inter_routes.values():
-                            _replace_city_route(inter_city_connection, route)
-                inter_city_db_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_inter_city_db_path.replace(inter_city_db_path)
-
                 LOGGER.info(
-                    "intercity routes=%s merged_routes=%s stop_of_route=%s shapes=%s city_db=%s status(routes/stops/shapes)=%s/%s/%s",
-                    len(inter_static_routes),
+                    "intercity merged_routes=%s stop_of_route=%s shapes=%s status(routes/stops/shapes)=%s/%s/%s",
                     len(merged_inter_routes),
                     len(inter_stop_of_route_items),
                     len(inter_shapes_raw),
-                    inter_city_db_path.name,
                     inter_routes_response.status_code,
                     inter_stops_response.status_code,
                     inter_shapes_response.status_code,
                 )
 
-        export_download_db(settings.db_path, settings.download_db_path)
+            if source_connection is not None:
+                remaining_prefix_rows = source_connection.execute(
+                    """
+                    SELECT DISTINCT SUBSTR(routeid, 1, 3) AS prefix
+                    FROM routes
+                    ORDER BY prefix
+                    """
+                ).fetchall()
+                with connection:
+                    for row in remaining_prefix_rows:
+                        prefix = row["prefix"]
+                        if not prefix or prefix in processed_prefixes:
+                            continue
+                        _copy_main_routes_by_prefix(
+                            source_connection,
+                            connection,
+                            prefix,
+                        )
+
+                    for city in settings.tdx_cities:
+                        if city in processed_cities:
+                            continue
+                        _copy_static_fetch_state_for_city(
+                            source_connection,
+                            connection,
+                            city,
+                        )
+
+        main_db_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_main_db_path.replace(main_db_path)
+
+        export_download_db(main_db_path, settings.download_db_path)
         refresh_database_versions(
-            settings.db_path,
+            main_db_path,
             download_db_path=settings.download_db_path,
             city_db_paths={
                 city: settings.city_db_path(city)
-                for city in effective_cities + (INTERCITY_CITY_NAME,)
+                for city in effective_cities
             },
             force=force,
         )
@@ -1009,6 +1383,8 @@ def sync_static(
     finally:
         client.close()
         token_manager.close()
+        if temp_main_db_path.exists():
+            temp_main_db_path.unlink()
 
 
 def main() -> None:
