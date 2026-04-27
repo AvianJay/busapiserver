@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from app.config import Settings
+from app.config import Settings, from_intercity_routeid, is_intercity_city
 from app.logging_utils import get_logger
 from app.tdx_auth import TDXTokenManager
 
@@ -166,6 +166,22 @@ class TDXClient:
             return list(payload.get("Items") or [])
         return []
 
+    def _bus_resource_path(self, city: str, resource: str) -> str:
+        if is_intercity_city(city):
+            return f"/v2/Bus/{resource}/InterCity"
+        return f"/v2/Bus/{resource}/City/{city}"
+
+    def _normalize_routeids_for_city(self, city: str, routeids: Iterable[str]) -> list[str]:
+        normalized: list[str] = []
+        for routeid in routeids:
+            cleaned = routeid.strip()
+            if not cleaned:
+                continue
+            normalized.append(
+                from_intercity_routeid(cleaned) if is_intercity_city(city) else cleaned
+            )
+        return normalized
+
     def _build_subroute_filter(self, routeids: Iterable[str]) -> str:
         clauses = []
         for routeid in routeids:
@@ -281,13 +297,13 @@ class TDXClient:
         )
 
     def fetch_routes(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v2/Bus/Route/City/{city}")
+        return self.fetch_paginated_items(self._bus_resource_path(city, "Route"))
 
     def fetch_stop_of_route(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v2/Bus/StopOfRoute/City/{city}")
+        return self.fetch_paginated_items(self._bus_resource_path(city, "StopOfRoute"))
 
     def fetch_shapes(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v2/Bus/Shape/City/{city}")
+        return self.fetch_paginated_items(self._bus_resource_path(city, "Shape"))
 
     def fetch_estimated_time_of_arrival(
         self,
@@ -303,9 +319,10 @@ class TDXClient:
         *,
         if_modified_since: str | None = None,
     ) -> TDXJSONResponse:
+        normalized_routeids = self._normalize_routeids_for_city(city, routeids)
         return self._fetch_subroute_batch(
-            f"/v2/Bus/EstimatedTimeOfArrival/City/{city}",
-            routeids,
+            self._bus_resource_path(city, "EstimatedTimeOfArrival"),
+            normalized_routeids,
             if_modified_since=if_modified_since,
         )
 
@@ -380,11 +397,12 @@ class TDXClient:
         *,
         if_modified_since: str | None = None,
     ) -> TDXJSONResponse:
+        normalized_routeids = self._normalize_routeids_for_city(city, routeids)
         return self._fetch_subroute_batch(
-            f"/v2/Bus/RealTimeByFrequency/City/{city}",
-            routeids,
+            self._bus_resource_path(city, "RealTimeByFrequency"),
+            normalized_routeids,
             if_modified_since=if_modified_since,
         )
 
     def fetch_alerts(self, city: str) -> list[dict[str, Any]]:
-        return self.fetch_paginated_items(f"/v2/Bus/Alert/City/{city}")
+        return self.fetch_paginated_items(self._bus_resource_path(city, "Alert"))

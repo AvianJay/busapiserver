@@ -182,7 +182,7 @@ def search_city_routes(
 
     normalized_query = query.strip()
     where_clause = ""
-    query_args: list[object] = [prefix]
+    query_args: list[object] = [f"{prefix}%"]
     if normalized_query:
         where_clause = """
             AND (

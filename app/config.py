@@ -36,6 +36,9 @@ DEFAULT_TDX_CITIES = (
     "LienchiangCounty",
 )
 
+INTERCITY_CITY_NAME = "InterCity"
+INTERCITY_PREFIX = "INT"
+
 CITY_PREFIX_TO_NAME = {
     "CHA": "ChanghuaCounty",
     "CYI": "Chiayi",
@@ -44,6 +47,7 @@ CITY_PREFIX_TO_NAME = {
     "HSZ": "Hsinchu",
     "HUA": "HualienCounty",
     "ILA": "YilanCounty",
+    "INT": INTERCITY_CITY_NAME,
     "KEE": "Keelung",
     "KHH": "Kaohsiung",
     "KIN": "KinmenCounty",
@@ -161,6 +165,8 @@ class Settings:
 def guess_city_from_routeid(routeid: str, allowed_cities: tuple[str, ...]) -> str | None:
     prefix = routeid[:3].upper()
     city = CITY_PREFIX_TO_NAME.get(prefix)
+    if city == INTERCITY_CITY_NAME:
+        return city
     if city and city in allowed_cities:
         return city
     return None
@@ -168,6 +174,26 @@ def guess_city_from_routeid(routeid: str, allowed_cities: tuple[str, ...]) -> st
 
 def routeid_to_city(routeid: str) -> str | None:
     return CITY_PREFIX_TO_NAME.get(routeid[:3].upper())
+
+
+def is_intercity_city(city: str) -> bool:
+    return city == INTERCITY_CITY_NAME
+
+
+def to_intercity_routeid(routeid: str) -> str:
+    normalized = routeid.strip()
+    if not normalized:
+        return normalized
+    if normalized[:3].upper() == INTERCITY_PREFIX:
+        return normalized
+    return f"{INTERCITY_PREFIX}{normalized}"
+
+
+def from_intercity_routeid(routeid: str) -> str:
+    normalized = routeid.strip()
+    if normalized[:3].upper() == INTERCITY_PREFIX:
+        return normalized[3:]
+    return normalized
 
 
 @lru_cache(maxsize=1)

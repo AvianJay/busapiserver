@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from app.config import Settings, get_settings, guess_city_from_routeid
+from app.config import INTERCITY_CITY_NAME, Settings, get_settings, guess_city_from_routeid, to_intercity_routeid
 from app.db import (
     get_connection,
     init_db,
@@ -59,6 +59,17 @@ class CacheEntry:
 class BusesCacheEntry:
     buses: list[dict[str, Any]]
     expires_at: float
+
+
+def _tdx_routeid_to_local(city: str, routeid: Any) -> str | None:
+    if routeid is None:
+        return None
+    normalized = str(routeid).strip()
+    if not normalized:
+        return None
+    if city == INTERCITY_CITY_NAME:
+        return to_intercity_routeid(normalized)
+    return normalized
 
 
 def _to_unix_seconds(value: str | None) -> int | None:
@@ -481,7 +492,10 @@ class RealtimeService:
 
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
-            routeid = item.get("SubRouteUID") or item.get("RouteUID")
+            routeid = _tdx_routeid_to_local(
+                city,
+                item.get("SubRouteUID") or item.get("RouteUID"),
+            )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
 
@@ -524,6 +538,8 @@ class RealtimeService:
         candidate_cities: list[str] = []
         guessed_city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
         if guessed_city:
+            if guessed_city == INTERCITY_CITY_NAME:
+                return [guessed_city]
             candidate_cities.append(guessed_city)
         for city in self.settings.tdx_cities:
             if city not in candidate_cities:
@@ -856,7 +872,10 @@ class RouteBusesService:
 
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
-            routeid = item.get("SubRouteUID") or item.get("RouteUID")
+            routeid = _tdx_routeid_to_local(
+                city,
+                item.get("SubRouteUID") or item.get("RouteUID"),
+            )
             if routeid in stale_buses:
                 items_by_route[routeid].append(item)
 
@@ -896,6 +915,8 @@ class RouteBusesService:
         candidate_cities: list[str] = []
         guessed_city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
         if guessed_city:
+            if guessed_city == INTERCITY_CITY_NAME:
+                return [guessed_city]
             candidate_cities.append(guessed_city)
         for city in self.settings.tdx_cities:
             if city not in candidate_cities:

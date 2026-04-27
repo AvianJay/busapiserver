@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.config import CITY_NAME_TO_PREFIX, Settings, get_settings
+from app.config import (
+    CITY_NAME_TO_PREFIX,
+    INTERCITY_CITY_NAME,
+    INTERCITY_PREFIX,
+    Settings,
+    get_settings,
+    to_intercity_routeid,
+)
 from app.db import (
     clear_inter_db,
     clear_city_db,
@@ -339,6 +347,31 @@ def _build_static_routes(
     return static_routes
 
 
+def _copy_route_with_routeid(route: StaticRoute, routeid: str) -> StaticRoute:
+    return StaticRoute(
+        routeid=routeid,
+        name=route.name,
+        name_en=route.name_en,
+        route_uid=route.route_uid,
+        departure=route.departure,
+        departure_en=route.departure_en,
+        destination=route.destination,
+        destination_en=route.destination_en,
+        operator_names=list(route.operator_names),
+        paths=dict(route.paths),
+    )
+
+
+def _prefix_inter_routes(static_routes: dict[str, StaticRoute]) -> dict[str, StaticRoute]:
+    return {
+        to_intercity_routeid(routeid): _copy_route_with_routeid(
+            route,
+            to_intercity_routeid(routeid),
+        )
+        for routeid, route in static_routes.items()
+    }
+
+
 def _replace_main_route(connection, route: StaticRoute) -> None:
     connection.execute(
         """
@@ -541,6 +574,7 @@ def _sync_route_operator_links(
     static_route_ids: set[str],
     *,
     table_name: str,
+    routeid_mapper: Callable[[str], str] | None = None,
 ) -> None:
     for route_item in routes:
         route_uid = route_item.get("RouteUID") or route_item.get("RouteID")
@@ -552,7 +586,8 @@ def _sync_route_operator_links(
                 continue
             for sub in route_item.get("SubRoutes") or []:
                 sub_uid = sub.get("SubRouteUID") or route_uid
-                if sub_uid not in static_route_ids:
+                mapped_routeid = routeid_mapper(sub_uid) if routeid_mapper else sub_uid
+                if mapped_routeid not in static_route_ids:
                     continue
                 connection.execute(
                     f"""
@@ -560,7 +595,7 @@ def _sync_route_operator_links(
                         (routeid, operator_id, seq)
                     VALUES (?, ?, ?)
                     """,
-                    (sub_uid, op_id, seq),
+                    (mapped_routeid, op_id, seq),
                 )
 
 
@@ -570,13 +605,18 @@ def _sync_route_schedules(
     static_route_ids: set[str],
     *,
     table_name: str,
+    routeid_mapper: Callable[[str], str] | None = None,
 ) -> None:
     for sched in schedules_raw:
         route_uid = sched.get("SubRouteUID") or sched.get("RouteUID")
-        if not route_uid or route_uid not in static_route_ids:
+        if not route_uid:
+            continue
+        mapped_routeid = routeid_mapper(route_uid) if routeid_mapper else route_uid
+        if mapped_routeid not in static_route_ids:
             continue
         direction = int(sched.get("Direction") or 0)
         subroute_uid = sched.get("SubRouteUID") or ""
+        mapped_subroute_uid = routeid_mapper(subroute_uid) if routeid_mapper and subroute_uid else subroute_uid
 
         for freq_seq, freq in enumerate(sched.get("Frequencys") or []):
             sd = freq.get("ServiceDay") or {}
@@ -602,7 +642,7 @@ def _sync_route_schedules(
                     (routeid, subroute_uid, direction, kind, seq, service_days, payload)
                 VALUES (?, ?, ?, 'frequency', ?, ?, ?)
                 """,
-                (route_uid, subroute_uid, direction, freq_seq, service_days, payload),
+                (mapped_routeid, mapped_subroute_uid, direction, freq_seq, service_days, payload),
             )
 
         for tt_seq, tt in enumerate(sched.get("Timetables") or []):
@@ -636,7 +676,7 @@ def _sync_route_schedules(
                     (routeid, subroute_uid, direction, kind, seq, service_days, payload)
                 VALUES (?, ?, ?, 'timetable', ?, ?, ?)
                 """,
-                (route_uid, subroute_uid, direction, tt_seq, service_days, payload),
+                (mapped_routeid, mapped_subroute_uid, direction, tt_seq, service_days, payload),
             )
 
 
@@ -814,7 +854,7 @@ def sync_static(
                     shapes_response.status_code,
                 )
 
-            inter_name = "InterCity"
+            inter_name = INTERCITY_CITY_NAME
             LOGGER.info("syncing intercity")
 
             inter_routes_state = load_tdx_fetch_state(connection, _resource_key(inter_name, "routes"))
@@ -881,15 +921,27 @@ def sync_static(
                     inter_stop_of_route_items,
                     inter_shapes_raw,
                 )
+                merged_inter_routes = _prefix_inter_routes(inter_static_routes)
                 inter_operators_raw = client.fetch_paginated_items("/v2/Bus/Operator/InterCity")
                 inter_schedules_raw = client.fetch_paginated_items("/v2/Bus/Schedule/InterCity")
 
                 with connection:
                     clear_inter_db(connection)
+                    delete_main_routes_by_prefix(connection, INTERCITY_PREFIX)
                     for route in inter_static_routes.values():
                         _replace_inter_route(connection, route)
+                    for route in merged_inter_routes.values():
+                        _replace_main_route(connection, route)
                     connection.execute("DELETE FROM inter_route_operators")
                     connection.execute("DELETE FROM inter_route_schedules")
+                    connection.execute(
+                        "DELETE FROM route_operators WHERE routeid LIKE ?",
+                        (f"{INTERCITY_PREFIX}%",),
+                    )
+                    connection.execute(
+                        "DELETE FROM route_schedules WHERE routeid LIKE ?",
+                        (f"{INTERCITY_PREFIX}%",),
+                    )
                     _upsert_operators(connection, inter_operators_raw)
                     _sync_route_operator_links(
                         connection,
@@ -903,12 +955,41 @@ def sync_static(
                         set(inter_static_routes),
                         table_name="inter_route_schedules",
                     )
+                    _sync_route_operator_links(
+                        connection,
+                        inter_routes_raw,
+                        set(merged_inter_routes),
+                        table_name="route_operators",
+                        routeid_mapper=to_intercity_routeid,
+                    )
+                    _sync_route_schedules(
+                        connection,
+                        inter_schedules_raw,
+                        set(merged_inter_routes),
+                        table_name="route_schedules",
+                        routeid_mapper=to_intercity_routeid,
+                    )
+
+                inter_city_db_path = settings.city_db_path(inter_name)
+                temp_inter_city_db_path = _city_temp_db_path(inter_city_db_path)
+                if temp_inter_city_db_path.exists():
+                    temp_inter_city_db_path.unlink()
+                init_city_db(temp_inter_city_db_path)
+                with get_connection(temp_inter_city_db_path) as inter_city_connection:
+                    with inter_city_connection:
+                        clear_city_db(inter_city_connection)
+                        for route in merged_inter_routes.values():
+                            _replace_city_route(inter_city_connection, route)
+                inter_city_db_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_inter_city_db_path.replace(inter_city_db_path)
 
                 LOGGER.info(
-                    "intercity routes=%s stop_of_route=%s shapes=%s status(routes/stops/shapes)=%s/%s/%s",
+                    "intercity routes=%s merged_routes=%s stop_of_route=%s shapes=%s city_db=%s status(routes/stops/shapes)=%s/%s/%s",
                     len(inter_static_routes),
+                    len(merged_inter_routes),
                     len(inter_stop_of_route_items),
                     len(inter_shapes_raw),
+                    inter_city_db_path.name,
                     inter_routes_response.status_code,
                     inter_stops_response.status_code,
                     inter_shapes_response.status_code,
@@ -918,7 +999,10 @@ def sync_static(
         refresh_database_versions(
             settings.db_path,
             download_db_path=settings.download_db_path,
-            city_db_paths={city: settings.city_db_path(city) for city in effective_cities},
+            city_db_paths={
+                city: settings.city_db_path(city)
+                for city in effective_cities + (INTERCITY_CITY_NAME,)
+            },
             force=force,
         )
         LOGGER.info("built download db at %s", settings.download_db_path)

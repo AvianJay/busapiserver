@@ -13,7 +13,7 @@ from app.api.metro import router as metro_router
 from app.api.rail import router as rail_router
 from app.api.bike import router as bike_router
 from app.api.inter import router as inter_router
-from app.config import get_settings
+from app.config import INTERCITY_CITY_NAME, get_settings
 from app.db import init_db, refresh_database_versions
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.sync_realtime import RealtimeService, RouteBusesService
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
         download_db_path=settings.download_db_path,
         city_db_paths={
             city: settings.city_db_path(city)
-            for city in settings.tdx_cities
+            for city in settings.tdx_cities + (INTERCITY_CITY_NAME,)
             if settings.city_db_path(city).exists()
         },
     )
