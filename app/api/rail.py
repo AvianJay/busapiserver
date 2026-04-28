@@ -736,15 +736,29 @@ def _parse_rail_alerts(raw: list[dict]) -> list[dict]:
         desc_raw = item.get("Description") or ""
         if isinstance(desc_raw, dict):
             desc_raw = desc_raw.get("Zh_tw") or desc_raw.get("En") or ""
+        title_text = str(title_raw).strip()
+        desc_text = str(desc_raw).strip()
+        normalized_title = title_text.replace(" ", "").lower()
+        normalized_desc = desc_text.replace(" ", "").lower()
+        alert_id = str(item.get("AlertID", "") or "")
+        if (
+            normalized_title in {"全線營運正常", "全線營運正常(normal)", "normal"}
+            or (
+                alert_id == "00000000-0000-0000-0000-000000000000"
+                and "全線營運正常" in title_text
+            )
+            or normalized_desc in {"全線營運正常", "全線營運正常(normal)", "normal"}
+        ):
+            continue
         raw_status = item.get("Status", 0)
         try:
             status_int = int(raw_status) if raw_status else 0
         except (TypeError, ValueError):
             status_int = 0
         alerts.append({
-            "alert_id": item.get("AlertID", ""),
-            "title": title_raw,
-            "description": desc_raw,
+            "alert_id": alert_id,
+            "title": title_text,
+            "description": desc_text,
             "status": status_int,
             "scope": item.get("Scope", ""),
             "direction": item.get("Direction"),
