@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/v1", tags=["rail"])
 STATIC_CACHE_TTL = 3600
 REALTIME_CACHE_TTL = 30
 TIMETABLE_CACHE_TTL = 300  # 5 min for daily timetables
+TAIWAN_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 
 @dataclass
@@ -48,6 +49,255 @@ def _set_cached(key: str, data: object) -> None:
 
 def _get_tdx(request: Request):
     return request.app.state.tdx_client
+
+
+def _taiwan_now() -> datetime.datetime:
+    return datetime.datetime.now(TAIWAN_TZ)
+
+
+def _parse_hhmm(value: str, service_date: datetime.date) -> datetime.datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        hours, minutes = text.split(":", 1)
+        return datetime.datetime(
+            service_date.year,
+            service_date.month,
+            service_date.day,
+            int(hours),
+            int(minutes),
+            tzinfo=TAIWAN_TZ,
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _roll_forward(
+    current: datetime.datetime | None,
+    previous: datetime.datetime | None,
+) -> datetime.datetime | None:
+    if current is None:
+        return None
+    if previous is None:
+        return current
+    while current < previous:
+        current += datetime.timedelta(days=1)
+    return current
+
+
+def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _lerp(start: float, end: float, ratio: float) -> float:
+    return start + ((end - start) * ratio)
+
+
+def _get_tra_station_lookup(request: Request) -> dict[str, dict[str, object]]:
+    cache_key = "tra_station_lookup"
+    cached = _get_cached(cache_key, STATIC_CACHE_TTL)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    tdx = _get_tdx(request)
+    raw = tdx.fetch_paginated_items("/v2/Rail/TRA/Station")
+
+    lookup: dict[str, dict[str, object]] = {}
+    for item in raw:
+        station_id = item.get("StationID", "")
+        if not station_id:
+            continue
+        position = item.get("StationPosition") or {}
+        lookup[station_id] = {
+            "station_id": station_id,
+            "name": (item.get("StationName") or {}).get("Zh_tw", ""),
+            "name_en": (item.get("StationName") or {}).get("En", ""),
+            "lat": position.get("PositionLat", 0) or 0,
+            "lon": position.get("PositionLon", 0) or 0,
+        }
+
+    _set_cached(cache_key, lookup)
+    return lookup
+
+
+def _get_tra_train_timetable(
+    request: Request,
+    *,
+    train_no: str,
+    service_date: datetime.date,
+) -> dict[str, object] | None:
+    cache_key = f"tra_train_timetable_{train_no}_{service_date.isoformat()}"
+    cached = _get_cached(cache_key, TIMETABLE_CACHE_TTL)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    tdx = _get_tdx(request)
+    raw = tdx.fetch_paginated_items(
+        f"/v2/Rail/TRA/DailyTimetable/TrainNo/{train_no}/TrainDate/{service_date.isoformat()}"
+    )
+    timetable = raw[0] if raw else None
+    if timetable is not None:
+        _set_cached(cache_key, timetable)
+    return timetable
+
+
+def _build_train_position_payload(
+    *,
+    live_entry: dict[str, object],
+    timetable: dict[str, object],
+    station_lookup: dict[str, dict[str, object]],
+    service_date: datetime.date,
+    now: datetime.datetime,
+) -> dict[str, object] | None:
+    daily_info = timetable.get("DailyTrainInfo") or {}
+    stop_times = timetable.get("StopTimes") or []
+    if not stop_times:
+        return None
+
+    normalized_stops: list[dict[str, object]] = []
+    previous_time: datetime.datetime | None = None
+
+    for raw_stop in stop_times:
+        station_id = raw_stop.get("StationID", "")
+        station_name = (raw_stop.get("StationName") or {}).get("Zh_tw", "")
+        station_meta = station_lookup.get(station_id, {})
+        arrival = _roll_forward(
+            _parse_hhmm(raw_stop.get("ArrivalTime", ""), service_date),
+            previous_time,
+        )
+        if arrival is not None:
+            previous_time = arrival
+        departure = _roll_forward(
+            _parse_hhmm(raw_stop.get("DepartureTime", ""), service_date),
+            previous_time,
+        )
+        if departure is not None:
+            previous_time = departure
+        normalized_stops.append({
+            "station_id": station_id,
+            "station_name": station_name or station_meta.get("name", ""),
+            "arrival": arrival,
+            "departure": departure,
+            "lat": float(station_meta.get("lat", 0) or 0),
+            "lon": float(station_meta.get("lon", 0) or 0),
+            "sequence": raw_stop.get("StopSequence", 0) or 0,
+        })
+
+    delay_minutes = int(live_entry.get("DelayTime") or 0)
+    delay_delta = datetime.timedelta(minutes=delay_minutes)
+    adjusted_now = now
+
+    first_stop = normalized_stops[0]
+    first_departure = first_stop.get("departure") or first_stop.get("arrival")
+    if isinstance(first_departure, datetime.datetime) and adjusted_now <= first_departure + delay_delta:
+        next_stop = normalized_stops[1] if len(normalized_stops) > 1 else first_stop
+        return _finalize_train_position(
+            live_entry=live_entry,
+            daily_info=daily_info,
+            current_stop=first_stop,
+            next_stop=next_stop,
+            progress=0.0,
+            status="at_station",
+        )
+
+    for index, current_stop in enumerate(normalized_stops):
+        arrival = current_stop.get("arrival")
+        departure = current_stop.get("departure") or arrival
+        if not isinstance(departure, datetime.datetime):
+            continue
+        if not isinstance(arrival, datetime.datetime):
+            arrival = departure
+        adjusted_arrival = arrival + delay_delta
+        adjusted_departure = departure + delay_delta
+        next_stop = normalized_stops[index + 1] if index + 1 < len(normalized_stops) else None
+
+        if adjusted_arrival <= adjusted_now <= adjusted_departure:
+            return _finalize_train_position(
+                live_entry=live_entry,
+                daily_info=daily_info,
+                current_stop=current_stop,
+                next_stop=next_stop or current_stop,
+                progress=0.0,
+                status="at_station",
+            )
+
+        if next_stop is None:
+            continue
+
+        next_arrival = next_stop.get("arrival") or next_stop.get("departure")
+        if not isinstance(next_arrival, datetime.datetime):
+            continue
+        segment_start = adjusted_departure
+        segment_end = next_arrival + delay_delta
+        if segment_end <= segment_start:
+            continue
+        if segment_start <= adjusted_now <= segment_end:
+            elapsed = (adjusted_now - segment_start).total_seconds()
+            total = (segment_end - segment_start).total_seconds()
+            progress = _clamp(elapsed / total if total > 0 else 0.0)
+            return _finalize_train_position(
+                live_entry=live_entry,
+                daily_info=daily_info,
+                current_stop=current_stop,
+                next_stop=next_stop,
+                progress=progress,
+                status="between_stations",
+            )
+
+    last_stop = normalized_stops[-1]
+    return _finalize_train_position(
+        live_entry=live_entry,
+        daily_info=daily_info,
+        current_stop=last_stop,
+        next_stop=last_stop,
+        progress=1.0,
+        status="arrived",
+    )
+
+
+def _finalize_train_position(
+    *,
+    live_entry: dict[str, object],
+    daily_info: dict[str, object],
+    current_stop: dict[str, object],
+    next_stop: dict[str, object],
+    progress: float,
+    status: str,
+) -> dict[str, object] | None:
+    current_lat = float(current_stop.get("lat", 0) or 0)
+    current_lon = float(current_stop.get("lon", 0) or 0)
+    next_lat = float(next_stop.get("lat", 0) or 0)
+    next_lon = float(next_stop.get("lon", 0) or 0)
+
+    if status == "between_stations":
+        if (current_lat == 0 and current_lon == 0) or (next_lat == 0 and next_lon == 0):
+            return None
+        latitude = _lerp(current_lat, next_lat, progress)
+        longitude = _lerp(current_lon, next_lon, progress)
+    else:
+        if current_lat == 0 and current_lon == 0:
+            return None
+        latitude = current_lat
+        longitude = current_lon
+
+    return {
+        "train_no": live_entry.get("TrainNo", ""),
+        "train_type": (live_entry.get("TrainTypeName") or {}).get("Zh_tw", ""),
+        "direction": live_entry.get("Direction", 0),
+        "starting_station_name": (daily_info.get("StartingStationName") or {}).get("Zh_tw", ""),
+        "ending_station_name": (daily_info.get("EndingStationName") or {}).get("Zh_tw", ""),
+        "delay_minutes": int(live_entry.get("DelayTime") or 0),
+        "status": status,
+        "progress": round(_clamp(progress), 4),
+        "current_station_id": current_stop.get("station_id", ""),
+        "current_station_name": current_stop.get("station_name", ""),
+        "next_station_id": next_stop.get("station_id", ""),
+        "next_station_name": next_stop.get("station_name", ""),
+        "lat": round(latitude, 6),
+        "lon": round(longitude, 6),
+        "updated_at": live_entry.get("UpdateTime") or live_entry.get("SrcUpdateTime") or "",
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -357,6 +607,58 @@ async def tra_liveboard(station_id: str, request: Request):
 
     _set_cached(cache_key, entries)
     return entries
+
+
+@router.get("/tra/train-positions/{station_id}")
+async def tra_train_positions(
+    station_id: str,
+    request: Request,
+    limit: int = Query(8, ge=1, le=20, description="Maximum trains to estimate"),
+):
+    """Estimate TRA train positions near a station using liveboard plus today's timetable."""
+    cache_key = f"tra_train_positions_{station_id}_{limit}"
+    cached = _get_cached(cache_key, REALTIME_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    tdx = _get_tdx(request)
+    liveboard = tdx.fetch_paginated_items(f"/v2/Rail/TRA/LiveBoard/Station/{station_id}")
+    if not liveboard:
+        _set_cached(cache_key, [])
+        return []
+
+    station_lookup = _get_tra_station_lookup(request)
+    now = _taiwan_now()
+    service_date = now.date()
+
+    positions: list[dict[str, object]] = []
+    for entry in liveboard[:limit]:
+        train_no = str(entry.get("TrainNo") or "").strip()
+        if not train_no:
+            continue
+        try:
+            timetable = _get_tra_train_timetable(
+                request,
+                train_no=train_no,
+                service_date=service_date,
+            )
+        except Exception as exc:
+            LOGGER.warning("failed to fetch TRA timetable for %s: %s", train_no, exc)
+            continue
+        if not timetable:
+            continue
+        position = _build_train_position_payload(
+            live_entry=entry,
+            timetable=timetable,
+            station_lookup=station_lookup,
+            service_date=service_date,
+            now=now,
+        )
+        if position is not None:
+            positions.append(position)
+
+    _set_cached(cache_key, positions)
+    return positions
 
 
 @router.get("/tra/shape")
