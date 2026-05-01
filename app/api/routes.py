@@ -4,6 +4,7 @@ from collections import deque
 from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import math
 import re
 import threading
 import time
@@ -135,6 +136,200 @@ def _resolve_city(city: str) -> tuple[str, str] | None:
     return prefix, city_name
 
 
+def _distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_radius = 6378137.0
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(d_lon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius * c
+
+
+def _search_routes(
+    connection,
+    *,
+    routeid_like: str | None,
+    query: str,
+    limit: int,
+) -> list[dict]:
+    normalized_query = query.strip()
+    prefix_clause = ""
+    query_args: list[object] = []
+    if routeid_like:
+        prefix_clause = "AND routes.routeid LIKE ?"
+        query_args.append(routeid_like)
+
+    where_clause = ""
+    if normalized_query:
+        where_clause = """
+            AND (
+                routes.name LIKE ?
+                OR routes.routeid LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM paths p
+                    WHERE p.routeid = routes.routeid
+                      AND p.name LIKE ?
+                )
+            )
+        """
+        wildcard = f"%{normalized_query}%"
+        query_args.extend([wildcard, wildcard, wildcard])
+
+    query_args.append(limit)
+
+    rows = connection.execute(
+        f"""
+        SELECT
+            routes.routeid AS routeid,
+            routes.name AS route_name,
+            routes.name_en AS route_name_en,
+            COALESCE(
+                (
+                    SELECT GROUP_CONCAT(path_name, ' / ')
+                    FROM (
+                        SELECT DISTINCT p.name AS path_name
+                        FROM paths p
+                        WHERE p.routeid = routes.routeid
+                          AND TRIM(COALESCE(p.name, '')) <> ''
+                        ORDER BY p.pathid ASC
+                    )
+                ),
+                ''
+            ) AS path_name,
+            COALESCE(
+                (
+                    SELECT GROUP_CONCAT(path_name_en, ' / ')
+                    FROM (
+                        SELECT DISTINCT p.name_en AS path_name_en
+                        FROM paths p
+                        WHERE p.routeid = routes.routeid
+                          AND TRIM(COALESCE(p.name_en, '')) <> ''
+                        ORDER BY p.pathid ASC
+                    )
+                ),
+                ''
+            ) AS path_name_en,
+            COALESCE(
+                (
+                    SELECT p.pathid
+                    FROM paths p
+                    WHERE p.routeid = routes.routeid
+                    ORDER BY p.pathid ASC
+                    LIMIT 1
+                ),
+                0
+            ) AS pathid,
+            SUBSTR(routes.routeid, 1, 3) AS city_code
+        FROM routes
+        WHERE 1 = 1
+        {prefix_clause}
+        {where_clause}
+        ORDER BY routes.routeid ASC
+        LIMIT ?
+        """,
+        tuple(query_args),
+    ).fetchall()
+
+    return [
+        {
+            "routeid": row["routeid"],
+            "route_name": row["route_name"],
+            "route_name_en": row["route_name_en"],
+            "pathid": int(row["pathid"]),
+            "path_name": row["path_name"],
+            "path_name_en": row["path_name_en"],
+            "city_code": row["city_code"],
+        }
+        for row in rows
+    ]
+
+
+def _load_nearby_stops(
+    connection,
+    *,
+    routeid_like: str,
+    latitude: float,
+    longitude: float,
+    radius: float,
+    limit: int,
+) -> list[dict]:
+    lat_delta = radius / 111320
+    lon_scale = abs(math.cos(math.radians(latitude)))
+    lon_delta = 180.0 if lon_scale < 1e-6 else radius / (111320 * lon_scale)
+    candidate_limit = max(limit * 25, 200)
+
+    rows = connection.execute(
+        """
+        SELECT
+            s.routeid AS routeid,
+            s.pathid AS pathid,
+            s.stopid AS stopid,
+            s.name AS stop_name,
+            s.seq AS seq,
+            s.lat AS lat,
+            s.lon AS lon,
+            r.name AS route_name,
+            COALESCE(p.name, '') AS path_name,
+            SUBSTR(s.routeid, 1, 3) AS city_code
+        FROM stops s
+        JOIN routes r ON r.routeid = s.routeid
+        LEFT JOIN paths p ON p.routeid = s.routeid AND p.pathid = s.pathid
+        WHERE s.routeid LIKE ?
+          AND s.lat BETWEEN ? AND ?
+          AND s.lon BETWEEN ? AND ?
+        ORDER BY s.routeid ASC, s.pathid ASC, s.seq ASC
+        LIMIT ?
+        """,
+        (
+            routeid_like,
+            latitude - lat_delta,
+            latitude + lat_delta,
+            longitude - lon_delta,
+            longitude + lon_delta,
+            candidate_limit,
+        ),
+    ).fetchall()
+
+    results: list[dict] = []
+    seen: set[tuple[str, int, str]] = set()
+    for row in rows:
+        row_lat = float(row["lat"])
+        row_lon = float(row["lon"])
+        distance = _distance_meters(latitude, longitude, row_lat, row_lon)
+        if distance > radius:
+            continue
+
+        dedupe_key = (row["routeid"], int(row["pathid"]), row["stopid"])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        results.append(
+            {
+                "routeid": row["routeid"],
+                "pathid": int(row["pathid"]),
+                "stopid": row["stopid"],
+                "stop_name": row["stop_name"],
+                "seq": int(row["seq"]),
+                "lat": row_lat,
+                "lon": row_lon,
+                "distance": round(distance, 2),
+                "route_name": row["route_name"],
+                "path_name": row["path_name"],
+                "city_code": row["city_code"],
+            }
+        )
+
+    results.sort(key=lambda item: item["distance"])
+    return results[:limit]
+
+
 @router.get("/downloads/bus.db")
 def download_bus_db(request: Request) -> FileResponse:
     db_path = request.app.state.settings.download_db_path
@@ -180,93 +375,56 @@ def search_city_routes(
         raise HTTPException(status_code=404, detail=f"City {city} was not found.")
     prefix, city_name = resolved_city
 
-    normalized_query = query.strip()
-    where_clause = ""
-    query_args: list[object] = [f"{prefix}%"]
-    if normalized_query:
-        where_clause = """
-            AND (
-                routes.name LIKE ?
-                OR routes.routeid LIKE ?
-                OR EXISTS (
-                    SELECT 1
-                    FROM paths p
-                    WHERE p.routeid = routes.routeid
-                      AND p.name LIKE ?
-                )
-            )
-        """
-        wildcard = f"%{normalized_query}%"
-        query_args.extend([wildcard, wildcard, wildcard])
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        return _search_routes(
+            connection,
+            routeid_like=f"{prefix}%",
+            query=query,
+            limit=limit,
+        )
 
-    query_args.append(limit)
+
+@router.get("/api/v1/routes")
+def search_routes(
+    request: Request,
+    query: str = Query(default="", max_length=120),
+    limit: int = Query(default=120, ge=1, le=300),
+) -> list[dict]:
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        return _search_routes(
+            connection,
+            routeid_like=None,
+            query=query,
+            limit=limit,
+        )
+
+
+@router.get("/api/v1/cities/{city}/stops/nearby")
+def get_city_nearby_stops(
+    city: str,
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius: float = Query(default=500, gt=0, le=3000),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> list[dict]:
+    resolved_city = _resolve_city(city)
+    if resolved_city is None:
+        raise HTTPException(status_code=404, detail=f"City {city} was not found.")
+    prefix, _ = resolved_city
 
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
-        rows = connection.execute(
-            f"""
-            SELECT
-                routes.routeid AS routeid,
-                routes.name AS route_name,
-                routes.name_en AS route_name_en,
-                COALESCE(
-                    (
-                        SELECT GROUP_CONCAT(path_name, ' / ')
-                        FROM (
-                            SELECT DISTINCT p.name AS path_name
-                            FROM paths p
-                            WHERE p.routeid = routes.routeid
-                              AND TRIM(COALESCE(p.name, '')) <> ''
-                            ORDER BY p.pathid ASC
-                        )
-                    ),
-                    ''
-                ) AS path_name,
-                COALESCE(
-                    (
-                        SELECT GROUP_CONCAT(path_name_en, ' / ')
-                        FROM (
-                            SELECT DISTINCT p.name_en AS path_name_en
-                            FROM paths p
-                            WHERE p.routeid = routes.routeid
-                              AND TRIM(COALESCE(p.name_en, '')) <> ''
-                            ORDER BY p.pathid ASC
-                        )
-                    ),
-                    ''
-                ) AS path_name_en,
-                COALESCE(
-                    (
-                        SELECT p.pathid
-                        FROM paths p
-                        WHERE p.routeid = routes.routeid
-                        ORDER BY p.pathid ASC
-                        LIMIT 1
-                    ),
-                    0
-                ) AS pathid,
-                SUBSTR(routes.routeid, 1, 3) AS city_code
-            FROM routes
-            WHERE routes.routeid LIKE ?
-            {where_clause}
-            ORDER BY routes.routeid ASC
-            LIMIT ?
-            """,
-            tuple(query_args),
-        ).fetchall()
-
-    return [
-        {
-            "routeid": row["routeid"],
-            "route_name": row["route_name"],
-            "route_name_en": row["route_name_en"],
-            "pathid": int(row["pathid"]),
-            "path_name": row["path_name"],
-            "path_name_en": row["path_name_en"],
-            "city_code": row["city_code"],
-        }
-        for row in rows
-    ]
+        return _load_nearby_stops(
+            connection,
+            routeid_like=f"{prefix}%",
+            latitude=lat,
+            longitude=lon,
+            radius=radius,
+            limit=limit,
+        )
 
 
 @router.get("/api/v1/routes/{routeid}/realtime/buses")
