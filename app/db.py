@@ -409,7 +409,11 @@ def _load_path_points_from_table(
         """,
         (routeid, pathid),
     ).fetchall()
-    return [(float(row["lat"]), float(row["lon"])) for row in rows]
+    return [
+        (float(row["lat"]), float(row["lon"]))
+        for row in rows
+        if -90 <= float(row["lat"]) <= 90 and -180 <= float(row["lon"]) <= 180
+    ]
 
 
 def load_route_static(connection: sqlite3.Connection, routeid: str) -> dict | None:
