@@ -124,6 +124,7 @@ class Settings:
     tdx_min_request_interval: float
     realtime_cache_ttl: int
     realtime_track_ttl: int
+    cors_origins: tuple[str, ...]
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -152,6 +153,7 @@ class Settings:
             tdx_min_request_interval=float(os.getenv("TDX_MIN_REQUEST_INTERVAL", "0.5")),
             realtime_cache_ttl=int(os.getenv("REALTIME_CACHE_TTL", "5")),
             realtime_track_ttl=int(os.getenv("REALTIME_TRACK_TTL", "30")),
+            cors_origins=_split_csv(os.getenv("CORS_ORIGINS"), ()),
         )
 
     def require_tdx_credentials(self) -> None:
