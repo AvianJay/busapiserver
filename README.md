@@ -18,6 +18,10 @@ TDX_CLIENT_SECRET=your_client_secret
 
 Optional:
 
+- `CORS_ORIGINS`
+  - Comma-separated list of allowed CORS origins.
+  - Default: *(empty — CORS middleware is disabled)*
+  - Example: `https://example.com,https://app.example.com`
 - `TDX_CITIES`
   - Comma-separated city list to sync from TDX.
   - Default: all supported `CityBus` cities/counties in Taiwan

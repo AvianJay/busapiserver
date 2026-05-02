@@ -6,6 +6,7 @@ import threading
 import time
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.routes import router
@@ -110,6 +111,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bus API Server", lifespan=lifespan)
+
+settings = get_settings()
+if settings.cors_origins:
+    # get_settings() is lru_cache'd so this returns the same instance used in lifespan.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_methods=["GET"],
+        allow_headers=["*"],
+    )
 
 
 @app.middleware("http")
