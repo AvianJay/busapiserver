@@ -181,6 +181,35 @@ def _search_routes(
         wildcard = f"%{normalized_query}%"
         query_args.extend([wildcard, wildcard, wildcard])
 
+    order_clause = "ORDER BY routes.routeid ASC"
+    if normalized_query:
+        normalized_lower = normalized_query.lower()
+        query_args.extend(
+            [
+                normalized_lower,
+                f"{normalized_lower}%",
+                f"%{normalized_lower}%",
+                normalized_lower,
+                f"%{normalized_lower}%",
+                len(normalized_query),
+            ]
+        )
+        order_clause = """
+        ORDER BY
+            CASE
+                WHEN LOWER(TRIM(COALESCE(routes.name, ''))) = ? THEN 0
+                WHEN LOWER(TRIM(COALESCE(routes.name, ''))) LIKE ? THEN 1
+                WHEN LOWER(TRIM(COALESCE(routes.name, ''))) LIKE ? THEN 2
+                WHEN LOWER(TRIM(COALESCE(routes.routeid, ''))) = ? THEN 3
+                WHEN LOWER(TRIM(COALESCE(routes.routeid, ''))) LIKE ? THEN 4
+                ELSE 5
+            END ASC,
+            ABS(LENGTH(TRIM(COALESCE(routes.name, ''))) - ?) ASC,
+            LENGTH(TRIM(COALESCE(routes.name, ''))) ASC,
+            LOWER(TRIM(COALESCE(routes.name, ''))) ASC,
+            routes.routeid ASC
+        """
+
     query_args.append(limit)
 
     rows = connection.execute(
@@ -230,7 +259,7 @@ def _search_routes(
         WHERE 1 = 1
         {prefix_clause}
         {where_clause}
-        ORDER BY routes.routeid ASC
+        {order_clause}
         LIMIT ?
         """,
         tuple(query_args),
