@@ -110,7 +110,13 @@ async def lifespan(app: FastAPI):
         shutdown_logging()
 
 
-app = FastAPI(title="Bus API Server", lifespan=lifespan)
+app = FastAPI(
+    title="Bus API Server",
+    lifespan=lifespan,
+    docs_url="/info/docs",
+    redoc_url="/info/redoc",
+    openapi_url="/info/openapi.json",
+)
 
 settings = get_settings()
 if settings.cors_origins:
