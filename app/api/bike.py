@@ -29,7 +29,7 @@ BIKE_CITIES = {
 # ── Caching ──────────────────────────────────────────────────────────────────
 
 STATION_CACHE_TTL = 3600  # 1 hour for station list (positions rarely change)
-AVAILABILITY_CACHE_TTL = 30  # 30 seconds for realtime availability
+AVAILABILITY_CACHE_TTL = 20  # 20 seconds for realtime availability
 
 
 @dataclass
