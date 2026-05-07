@@ -125,6 +125,13 @@ class Settings:
     realtime_cache_ttl: int
     realtime_track_ttl: int
     cors_origins: tuple[str, ...]
+    auth_public_base_url: str
+    auth_state_ttl_seconds: int
+    auth_snowflake_node_id: int
+    discord_oauth_client_id: str | None
+    discord_oauth_client_secret: str | None
+    google_oauth_client_id: str | None
+    google_oauth_client_secret: str | None
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -154,6 +161,16 @@ class Settings:
             realtime_cache_ttl=int(os.getenv("REALTIME_CACHE_TTL", "5")),
             realtime_track_ttl=int(os.getenv("REALTIME_TRACK_TTL", "30")),
             cors_origins=_split_csv(os.getenv("CORS_ORIGINS"), ()),
+            auth_public_base_url=os.getenv(
+                "AUTH_PUBLIC_BASE_URL",
+                "https://bus.avianjay.sbs",
+            ).rstrip("/"),
+            auth_state_ttl_seconds=int(os.getenv("AUTH_STATE_TTL_SECONDS", "600")),
+            auth_snowflake_node_id=int(os.getenv("AUTH_SNOWFLAKE_NODE_ID", "0")),
+            discord_oauth_client_id=os.getenv("DISCORD_OAUTH_CLIENT_ID"),
+            discord_oauth_client_secret=os.getenv("DISCORD_OAUTH_CLIENT_SECRET"),
+            google_oauth_client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
+            google_oauth_client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
         )
 
     def require_tdx_credentials(self) -> None:

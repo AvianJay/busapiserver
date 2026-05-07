@@ -7,6 +7,9 @@ import time
 
 from fastapi import HTTPException, Request
 
+from app.auth_service import AuthPrincipal, authenticate_token
+from app.config import get_settings
+
 
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
@@ -37,6 +40,27 @@ def _normalize_bucket(route_template: str) -> str:
     if route_template.startswith("/api/v1/routes/") and "realtime" in route_template:
         return "/api/v1/routes/realtime"
     return route_template
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    authorization = (request.headers.get("authorization") or "").strip()
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def _authenticate_request(request: Request) -> AuthPrincipal | None:
+    if hasattr(request.state, "auth_principal"):
+        return request.state.auth_principal
+
+    principal = None
+    token = _extract_bearer_token(request)
+    if token:
+        settings = getattr(request.app.state, "settings", None) or get_settings()
+        principal = authenticate_token(settings, token)
+    request.state.auth_principal = principal
+    return principal
 
 
 def _prune_stale_hits(window_start: float) -> None:
@@ -77,11 +101,17 @@ def check_rate_limit(client_ip: str, bucket: str, *, now: float | None = None) -
 
 
 def enforce_rate_limit(request: Request) -> None:
-    route_template = _resolve_route_template(request)
-    if route_template is None:
-        return
+    principal = _authenticate_request(request)
+    if principal is None:
+        bucket = f"ip:{_get_client_ip(request)}"
+    else:
+        bucket = f"user:{principal.account_id}"
 
-    check_rate_limit(_get_client_ip(request), _normalize_bucket(route_template))
+    check_rate_limit(bucket, "global")
+
+
+def get_request_principal(request: Request) -> AuthPrincipal | None:
+    return _authenticate_request(request)
 
 
 def reset_rate_limit_state() -> None:

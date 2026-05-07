@@ -135,6 +135,77 @@ CREATE INDEX IF NOT EXISTS idx_request_analytics_app_version
     ON request_analytics(app_version);
 CREATE INDEX IF NOT EXISTS idx_request_analytics_browser_name
     ON request_analytics(browser_name);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    id         INTEGER PRIMARY KEY,
+    role       TEXT NOT NULL DEFAULT 'user'
+               CHECK (role IN ('admin', 'mod', 'user')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_oauth_identities (
+    provider         TEXT NOT NULL
+                     CHECK (provider IN ('discord', 'google')),
+    provider_user_id TEXT NOT NULL,
+    account_id       INTEGER NOT NULL,
+    email            TEXT,
+    display_name     TEXT,
+    avatar_url       TEXT,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (provider, provider_user_id),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_oauth_identities_account
+    ON account_oauth_identities(account_id);
+
+CREATE TABLE IF NOT EXISTS account_devices (
+    id           INTEGER PRIMARY KEY,
+    account_id   INTEGER NOT NULL,
+    device_key   TEXT NOT NULL UNIQUE,
+    created_at   INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_devices_account
+    ON account_devices(account_id);
+
+CREATE TABLE IF NOT EXISTS account_device_tokens (
+    id           INTEGER PRIMARY KEY,
+    account_id   INTEGER NOT NULL,
+    device_id    INTEGER NOT NULL,
+    token_hash   TEXT NOT NULL UNIQUE,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    revoked_at   INTEGER,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY (device_id) REFERENCES account_devices(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_device_tokens_account
+    ON account_device_tokens(account_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_device_tokens_active_device
+    ON account_device_tokens(device_id)
+    WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS auth_oauth_states (
+    state_hash   TEXT PRIMARY KEY,
+    provider     TEXT NOT NULL
+                 CHECK (provider IN ('discord', 'google')),
+    platform     TEXT NOT NULL
+                 CHECK (platform IN ('web', 'app')),
+    redirect_uri TEXT NOT NULL,
+    device_key   TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL,
+    used_at      INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_oauth_states_expires_at
+    ON auth_oauth_states(expires_at);
 """
 
 DOWNLOAD_SCHEMA_SQL = """
