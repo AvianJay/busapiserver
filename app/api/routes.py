@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import math
@@ -10,23 +8,20 @@ import threading
 import time
 
 import requests
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
 from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME
 from app.logging_utils import get_logger
+from app.rate_limit import enforce_rate_limit
 from app.sync_realtime import RouteNotFoundError
 
 LOGGER = get_logger("routes")
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(enforce_rate_limit)])
 
-RATE_LIMIT_REQUESTS = 30
-RATE_LIMIT_WINDOW_SECONDS = 60
-_rate_limit_lock = threading.Lock()
-_rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
 _download_name_pattern = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 ALERTS_CACHE_TTL_SECONDS = 600  # 10 minutes
@@ -46,44 +41,6 @@ _alerts_cache: dict[str, _AlertsCacheEntry] = {}
 _alerts_cache_lock = threading.Lock()
 _alerts_in_flight: dict[str, list[dict] | None] = {}
 _alerts_in_flight_lock = threading.Lock()
-
-
-def _get_client_ip(request: Request) -> str:
-    # Trust Cloudflare's connecting IP first.
-    cf_ip = (request.headers.get("CF-Connecting-IP") or "").strip()
-    if cf_ip:
-        return cf_ip
-    return (request.client.host if request.client else "unknown").strip() or "unknown"
-
-
-def _check_route_rate_limit(request: Request) -> None:
-    route = request.scope.get("route")
-    route_template = getattr(route, "path", request.url.path)
-    if not isinstance(route_template, str) or not route_template.startswith("/api/v1/routes/"):
-        return
-
-    if "realtime" in route_template:
-        route_template = "/api/v1/routes/realtime"
-
-    ip = _get_client_ip(request)
-    now = time.monotonic()
-    window_start = now - RATE_LIMIT_WINDOW_SECONDS
-    key = (ip, route_template)
-
-    with _rate_limit_lock:
-        hits = _rate_limit_hits.setdefault(key, deque())
-        while hits and hits[0] < window_start:
-            hits.popleft()
-
-        if len(hits) >= RATE_LIMIT_REQUESTS:
-            retry_after = max(1, int(hits[0] + RATE_LIMIT_WINDOW_SECONDS - now))
-            raise HTTPException(
-                status_code=429,
-                detail="Too many requests. Please try again later.",
-                headers={"Retry-After": str(retry_after)},
-            )
-
-        hits.append(now)
 
 
 def _encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> str:
@@ -380,7 +337,6 @@ def download_city_db(name: str, request: Request) -> FileResponse:
 
 @router.get("/api/v1/routes/{routeid}/realtime")
 def get_route_realtime(routeid: str, request: Request) -> dict:
-    _check_route_rate_limit(request)
     service = request.app.state.realtime_service
     try:
         return service.get_snapshot(routeid)
@@ -458,7 +414,6 @@ def get_city_nearby_stops(
 
 @router.get("/api/v1/routes/{routeid}/realtime/buses")
 def get_route_buses(routeid: str, request: Request) -> list[dict]:
-    _check_route_rate_limit(request)
     service = request.app.state.route_buses_service
     try:
         return service.get_buses(routeid)
@@ -472,7 +427,6 @@ def get_route_buses(routeid: str, request: Request) -> list[dict]:
 
 @router.get("/api/v1/routes/{routeid}/paths/{pathid}/points")
 def get_route_path_points(routeid: str, pathid: int, request: Request) -> dict:
-    _check_route_rate_limit(request)
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         if not path_exists(connection, routeid, pathid):
@@ -491,7 +445,6 @@ def get_route_path_points(routeid: str, pathid: int, request: Request) -> dict:
 
 @router.get("/api/v1/routes/{routeid}/stops")
 def get_route_stops(routeid: str, request: Request) -> dict:
-    _check_route_rate_limit(request)
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         static_route = load_route_static(connection, routeid)
@@ -651,7 +604,6 @@ def _fetch_city_alerts_cached(request: Request, city_name: str) -> list[dict]:
 
 @router.get("/api/v1/routes/{routeuid}/alerts")
 def get_route_alerts(routeuid: str, request: Request) -> dict:
-    _check_route_rate_limit(request)
     prefix = routeuid[:3].upper()
     city_name = CITY_PREFIX_TO_NAME.get(prefix)
     routeid = routeuid[3:]
@@ -685,7 +637,6 @@ def get_database_version(name: str, request: Request) -> dict:
 
 @router.get("/api/v1/routes/{routeid}/operators")
 def get_route_operators(routeid: str, request: Request) -> list[dict]:
-    _check_route_rate_limit(request)
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         rows = connection.execute(
@@ -714,7 +665,6 @@ def get_route_operators(routeid: str, request: Request) -> list[dict]:
 
 @router.get("/api/v1/routes/{routeid}/schedule")
 def get_route_schedule(routeid: str, request: Request) -> list[dict]:
-    _check_route_rate_limit(request)
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         rows = connection.execute(

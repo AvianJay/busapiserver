@@ -4,13 +4,18 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.logging_utils import get_logger
+from app.rate_limit import enforce_rate_limit
 
 LOGGER = get_logger("bike")
 
-router = APIRouter(prefix="/api/v1/bike", tags=["bike"])
+router = APIRouter(
+    prefix="/api/v1/bike",
+    tags=["bike"],
+    dependencies=[Depends(enforce_rate_limit)],
+)
 
 # Cities that have YouBike / public bike systems.
 BIKE_CITIES = {

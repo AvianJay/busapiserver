@@ -4,14 +4,19 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.config import CITY_PREFIX_TO_NAME
 from app.logging_utils import get_logger
+from app.rate_limit import enforce_rate_limit
 
 LOGGER = get_logger("metro")
 
-router = APIRouter(prefix="/api/v1/metro", tags=["metro"])
+router = APIRouter(
+    prefix="/api/v1/metro",
+    tags=["metro"],
+    dependencies=[Depends(enforce_rate_limit)],
+)
 
 # Mapping of metro system codes to TDX city names.
 METRO_SYSTEMS = {

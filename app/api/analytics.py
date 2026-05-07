@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 
+from app.rate_limit import enforce_rate_limit
 from app.request_analytics import build_analytics_report
 
 
-router = APIRouter(tags=["analytics"])
+router = APIRouter(tags=["analytics"], dependencies=[Depends(enforce_rate_limit)])
 
 
 @router.get("/api/v1/analytics")
