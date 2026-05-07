@@ -106,6 +106,35 @@ CREATE TABLE IF NOT EXISTS database_versions (
     content_hash TEXT NOT NULL,
     updated_at   INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS request_analytics (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    requested_at    INTEGER NOT NULL,
+    method          TEXT NOT NULL,
+    endpoint        TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    status_code     INTEGER NOT NULL,
+    client_family   TEXT NOT NULL,
+    platform_name   TEXT,
+    system_name     TEXT,
+    system_version  TEXT,
+    app_version     TEXT,
+    app_commit_hash TEXT,
+    browser_name    TEXT,
+    browser_version TEXT,
+    user_agent      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_analytics_requested_at
+    ON request_analytics(requested_at);
+CREATE INDEX IF NOT EXISTS idx_request_analytics_endpoint
+    ON request_analytics(endpoint);
+CREATE INDEX IF NOT EXISTS idx_request_analytics_client_family
+    ON request_analytics(client_family);
+CREATE INDEX IF NOT EXISTS idx_request_analytics_app_version
+    ON request_analytics(app_version);
+CREATE INDEX IF NOT EXISTS idx_request_analytics_browser_name
+    ON request_analytics(browser_name);
 """
 
 DOWNLOAD_SCHEMA_SQL = """
@@ -157,6 +186,7 @@ def _configure_connection(connection: sqlite3.Connection) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON;")
     connection.execute("PRAGMA journal_mode = WAL;")
+    connection.execute("PRAGMA busy_timeout = 5000;")
     return connection
 
 

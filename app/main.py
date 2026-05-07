@@ -5,10 +5,11 @@ from datetime import datetime, timedelta
 import threading
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
+from app.api.analytics import router as analytics_router
 from app.api.routes import router
 from app.api.metro import router as metro_router
 from app.api.rail import router as rail_router
@@ -16,6 +17,7 @@ from app.api.bike import router as bike_router
 from app.config import get_settings
 from app.db import export_download_db, init_db, refresh_database_versions
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
+from app.request_analytics import record_request_analytics, should_record_analytics
 from app.sync_realtime import RealtimeService, RouteBusesService
 from app.sync_static import sync_static
 from app.tdx_auth import TDXTokenManager
@@ -59,6 +61,42 @@ def _run_weekly_static_sync(app: FastAPI, stop_event: threading.Event) -> None:
             # Avoid tight error loop.
             if not stop_event.wait(timeout=60):
                 continue
+
+
+def _resolve_endpoint_template(request: Request) -> str | None:
+    route = request.scope.get("route")
+    route_template = getattr(route, "path", None)
+    if not isinstance(route_template, str) or not route_template:
+        return None
+    return route_template
+
+
+def _record_request_analytics_safe(request: Request, path: str, status_code: int) -> None:
+    endpoint = _resolve_endpoint_template(request)
+    if not should_record_analytics(endpoint):
+        return
+
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        return
+
+    try:
+        record_request_analytics(
+            settings.db_path,
+            method=request.method,
+            endpoint=endpoint,
+            path=path,
+            status_code=status_code,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "request analytics write failed method=%s path=%s status=%s error=%s",
+            request.method,
+            path,
+            status_code,
+            exc,
+        )
 
 
 @asynccontextmanager
@@ -130,13 +168,15 @@ if settings.cors_origins:
 
 
 @app.middleware("http")
-async def log_requests(request, call_next):
+async def log_requests(request: Request, call_next):
     started_at = time.perf_counter()
     client_host = request.client.host if request.client else "unknown"
     path = request.url.path
+    status_code = 500
 
     try:
         response = await call_next(request)
+        status_code = response.status_code
     except Exception:
         duration_ms = (time.perf_counter() - started_at) * 1000
         LOGGER.exception(
@@ -146,6 +186,7 @@ async def log_requests(request, call_next):
             client_host,
             duration_ms,
         )
+        _record_request_analytics_safe(request, path, status_code)
         raise
 
     duration_ms = (time.perf_counter() - started_at) * 1000
@@ -153,14 +194,16 @@ async def log_requests(request, call_next):
         "request method=%s path=%s status=%s client=%s duration_ms=%.1f",
         request.method,
         path,
-        response.status_code,
+        status_code,
         client_host,
         duration_ms,
     )
+    _record_request_analytics_safe(request, path, status_code)
     return response
 
 
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
+app.include_router(analytics_router)
 app.include_router(router)
 app.include_router(metro_router)
 app.include_router(rail_router)
