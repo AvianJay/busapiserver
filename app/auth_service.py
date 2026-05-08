@@ -20,7 +20,7 @@ AuthProvider = Literal["discord", "google"]
 AuthPlatform = Literal["web", "app"]
 
 ALLOWED_ROLES = {"admin", "mod", "user"}
-DEFAULT_WEB_REDIRECT_URI = "https://busapp.avianjay.sbs/auth-callback"
+DEFAULT_WEB_REDIRECT_URI = "https://busapp.avianjay.sbs/"
 DEFAULT_APP_REDIRECT_URI = "yabus://auth-callback"
 DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"

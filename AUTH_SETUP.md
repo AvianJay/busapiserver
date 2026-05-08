@@ -45,7 +45,7 @@ Defaults are already wired for production:
 ```text
 YABUS_API_BASE_URL=https://bus.avianjay.sbs
 YABUS_APP_AUTH_REDIRECT_URI=yabus://auth-callback
-YABUS_WEB_AUTH_REDIRECT_URI=https://busapp.avianjay.sbs/auth-callback
+YABUS_WEB_AUTH_REDIRECT_URI=https://busapp.avianjay.sbs/
 ```
 
 Builds can override them:
@@ -60,7 +60,7 @@ Optional redirect overrides:
 
 ```bash
 --dart-define=YABUS_APP_AUTH_REDIRECT_URI=yabus://auth-callback
---dart-define=YABUS_WEB_AUTH_REDIRECT_URI=https://busapp.avianjay.sbs/auth-callback
+--dart-define=YABUS_WEB_AUTH_REDIRECT_URI=https://busapp.avianjay.sbs/
 ```
 
 Google native Sign-In defines for Android/iOS:
