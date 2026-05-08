@@ -1,47 +1,80 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YABus 帳戶中心</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f7f3ec;
-      --surface: rgba(255, 251, 245, 0.9);
-      --surface-strong: #fffdf9;
-      --ink: #17333a;
-      --muted: #607077;
-      --line: rgba(23, 51, 58, 0.13);
-      --google: #d5593f;
-      --discord: #0b6874;
-      --success: #0f7566;
-      --warning: #b64e38;
-      --card-shadow: 0 24px 80px rgba(23, 51, 58, 0.11);
-      --radius: 26px;
+      --bg-primary: #0b0f1a;
+      --bg-secondary: #111827;
+      --surface: rgba(255, 255, 255, 0.04);
+      --surface-hover: rgba(255, 255, 255, 0.07);
+      --surface-strong: rgba(255, 255, 255, 0.1);
+      --ink: #f0f2f5;
+      --ink-secondary: #94a3b8;
+      --muted: #64748b;
+      --line: rgba(255, 255, 255, 0.08);
+      --line-strong: rgba(255, 255, 255, 0.14);
+      --google: #ea4335;
+      --google-glow: rgba(234, 67, 53, 0.25);
+      --discord: #5865f2;
+      --discord-glow: rgba(88, 101, 242, 0.25);
+      --success: #34d399;
+      --success-glow: rgba(52, 211, 153, 0.15);
+      --warning: #fb923c;
+      --warning-glow: rgba(251, 146, 60, 0.15);
+      --error: #f87171;
+      --error-glow: rgba(248, 113, 113, 0.15);
+      --info: #60a5fa;
+      --info-glow: rgba(96, 165, 250, 0.15);
+      --accent: #6ee7b7;
+      --accent-secondary: #a78bfa;
+      --radius: 20px;
+      --radius-sm: 14px;
+      --radius-xs: 10px;
     }
 
     * {
       box-sizing: border-box;
+      margin: 0;
+      padding: 0;
     }
 
     body {
-      margin: 0;
       min-height: 100vh;
       color: var(--ink);
+      background: var(--bg-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
       background:
-        radial-gradient(circle at top left, rgba(213, 89, 63, 0.18), transparent 26%),
-        radial-gradient(circle at top right, rgba(11, 104, 116, 0.16), transparent 24%),
-        linear-gradient(165deg, #fcf7ef 0%, #f4efe6 52%, #edf0ec 100%);
-      font-family: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+        radial-gradient(ellipse 80% 50% at 20% -10%, rgba(110, 231, 183, 0.12), transparent),
+        radial-gradient(ellipse 60% 40% at 80% 10%, rgba(167, 139, 250, 0.1), transparent),
+        radial-gradient(ellipse 50% 60% at 50% 100%, rgba(88, 101, 242, 0.08), transparent);
+      pointer-events: none;
+      z-index: 0;
     }
 
     .shell {
-      width: min(1180px, calc(100% - 32px));
+      position: relative;
+      z-index: 1;
+      width: min(1200px, calc(100% - 40px));
       margin: 0 auto;
-      padding: 32px 0 48px;
+      padding: 40px 0 60px;
       display: grid;
-      gap: 18px;
+      gap: 20px;
     }
 
     .hero,
@@ -51,51 +84,122 @@
       border: 1px solid var(--line);
       background: var(--surface);
       border-radius: var(--radius);
-      box-shadow: var(--card-shadow);
-      backdrop-filter: blur(14px);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      transition: border-color 0.3s ease, background 0.3s ease;
+    }
+
+    .panel:hover {
+      border-color: var(--line-strong);
+      background: var(--surface-hover);
     }
 
     .hero {
-      padding: 32px;
+      padding: 40px;
       display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr);
-      gap: 18px;
+      grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.7fr);
+      gap: 24px;
       align-items: center;
       overflow: hidden;
       position: relative;
     }
 
+    .hero::before {
+      content: "";
+      position: absolute;
+      width: 500px;
+      height: 500px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(110, 231, 183, 0.08), transparent 70%);
+      right: -150px;
+      top: -200px;
+      pointer-events: none;
+      animation: float 8s ease-in-out infinite;
+    }
+
     .hero::after {
       content: "";
       position: absolute;
-      width: 240px;
-      height: 240px;
-      border-radius: 999px;
-      background: linear-gradient(135deg, rgba(213, 89, 63, 0.16), rgba(11, 104, 116, 0.14));
-      right: -70px;
-      top: -80px;
+      width: 300px;
+      height: 300px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(167, 139, 250, 0.06), transparent 70%);
+      left: -100px;
+      bottom: -150px;
       pointer-events: none;
+      animation: float 10s ease-in-out infinite reverse;
+    }
+
+    @keyframes float {
+
+      0%,
+      100% {
+        transform: translate(0, 0);
+      }
+
+      50% {
+        transform: translate(15px, -10px);
+      }
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .shell>* {
+      animation: fadeInUp 0.5s ease both;
+    }
+
+    .shell> :nth-child(2) {
+      animation-delay: 0.08s;
+    }
+
+    .shell> :nth-child(3) {
+      animation-delay: 0.16s;
     }
 
     .eyebrow {
-      margin: 0 0 10px;
+      margin: 0 0 12px;
       text-transform: uppercase;
-      letter-spacing: 0.18em;
-      font-size: 12px;
-      color: var(--muted);
+      letter-spacing: 0.2em;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
     }
 
     h1,
     h2,
     h3 {
       margin: 0;
-      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      font-weight: 700;
+      letter-spacing: -0.02em;
     }
 
     h1 {
-      font-size: clamp(34px, 6vw, 60px);
-      line-height: 0.96;
-      max-width: 11ch;
+      font-size: clamp(30px, 5vw, 48px);
+      line-height: 1.1;
+      max-width: 14ch;
+      background: linear-gradient(135deg, #f0f2f5 0%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    h2 {
+      font-size: 20px;
+    }
+
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
     }
 
     .hero p,
@@ -103,53 +207,75 @@
     .device p,
     .identity p {
       margin: 0;
-      color: var(--muted);
+      color: var(--ink-secondary);
       line-height: 1.7;
+      font-size: 14px;
     }
 
     .hero-aside {
       position: relative;
       z-index: 1;
       display: grid;
-      gap: 12px;
+      gap: 14px;
     }
 
     .badge {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      padding: 10px 14px;
+      padding: 8px 16px;
       border-radius: 999px;
-      border: 1px solid rgba(23, 51, 58, 0.1);
-      background: rgba(255, 255, 255, 0.74);
-      font-weight: 700;
+      border: 1px solid var(--line-strong);
+      background: rgba(110, 231, 183, 0.08);
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 13px;
       width: fit-content;
     }
 
     .notice {
-      padding: 18px 20px;
+      padding: 20px 24px;
       display: grid;
       gap: 12px;
     }
 
+    .notice h2 {
+      font-size: 17px;
+    }
+
     .notice-success {
-      border-color: rgba(15, 117, 102, 0.2);
-      background: rgba(15, 117, 102, 0.08);
+      border-color: rgba(52, 211, 153, 0.25);
+      background: var(--success-glow);
+    }
+
+    .notice-success h2 {
+      color: var(--success);
     }
 
     .notice-error {
-      border-color: rgba(182, 78, 56, 0.24);
-      background: rgba(182, 78, 56, 0.09);
+      border-color: rgba(248, 113, 113, 0.25);
+      background: var(--error-glow);
+    }
+
+    .notice-error h2 {
+      color: var(--error);
     }
 
     .notice-info {
-      border-color: rgba(11, 104, 116, 0.2);
-      background: rgba(11, 104, 116, 0.08);
+      border-color: rgba(96, 165, 250, 0.2);
+      background: var(--info-glow);
+    }
+
+    .notice-info h2 {
+      color: var(--info);
     }
 
     .notice-warning {
-      border-color: rgba(182, 78, 56, 0.24);
-      background: rgba(182, 78, 56, 0.1);
+      border-color: rgba(251, 146, 60, 0.25);
+      background: var(--warning-glow);
+    }
+
+    .notice-warning h2 {
+      color: var(--warning);
     }
 
     .notice-actions,
@@ -162,13 +288,13 @@
     .grid {
       display: grid;
       grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
-      gap: 18px;
+      gap: 20px;
     }
 
     .panel {
-      padding: 24px;
+      padding: 28px;
       display: grid;
-      gap: 18px;
+      gap: 20px;
       align-content: start;
     }
 
@@ -184,26 +310,35 @@
     }
 
     .metric {
-      padding: 16px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.7);
-      border: 1px solid rgba(23, 51, 58, 0.08);
+      padding: 18px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-hover);
+      border: 1px solid var(--line);
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .metric:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-2px);
     }
 
     .metric strong {
       display: block;
-      font-size: 13px;
+      font-size: 11px;
+      font-weight: 600;
       color: var(--muted);
       margin-bottom: 8px;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.1em;
     }
 
     .metric span {
       display: block;
-      font-size: 18px;
+      font-size: 15px;
+      font-weight: 500;
       line-height: 1.4;
       word-break: break-word;
+      color: var(--ink);
     }
 
     .identity-list,
@@ -214,10 +349,17 @@
 
     .identity,
     .device {
-      padding: 18px;
+      padding: 20px;
       display: grid;
       gap: 10px;
-      background: rgba(255, 255, 255, 0.72);
+      background: var(--surface-hover);
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .identity:hover,
+    .device:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-2px);
     }
 
     .identity-head,
@@ -231,97 +373,131 @@
     .pill {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       border-radius: 999px;
-      padding: 8px 12px;
-      border: 1px solid rgba(23, 51, 58, 0.1);
-      background: rgba(255, 255, 255, 0.72);
-      font-size: 13px;
-      font-weight: 700;
+      padding: 6px 14px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      font-size: 12px;
+      font-weight: 600;
     }
 
     .pill-google {
       color: var(--google);
+      border-color: rgba(234, 67, 53, 0.25);
     }
 
     .pill-discord {
       color: var(--discord);
+      border-color: rgba(88, 101, 242, 0.25);
     }
 
     .mono {
-      font-family: "Consolas", "SFMono-Regular", monospace;
-      font-size: 13px;
+      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      color: var(--muted);
     }
 
     .empty {
-      padding: 18px;
-      border-radius: 18px;
-      border: 1px dashed rgba(23, 51, 58, 0.16);
+      padding: 20px;
+      border-radius: var(--radius-sm);
+      border: 1px dashed rgba(255, 255, 255, 0.1);
       color: var(--muted);
-      background: rgba(255, 255, 255, 0.46);
+      background: transparent;
+      text-align: center;
+      font-size: 13px;
     }
 
     .button {
       display: inline-flex;
       justify-content: center;
       align-items: center;
-      gap: 10px;
-      min-height: 46px;
-      padding: 12px 18px;
-      border-radius: 15px;
+      gap: 8px;
+      min-height: 42px;
+      padding: 10px 20px;
+      border-radius: var(--radius-xs);
       border: 1px solid transparent;
       font: inherit;
-      font-weight: 700;
+      font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
       text-decoration: none;
-      transition: transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+      transition: all 0.2s ease;
+      position: relative;
+      overflow: hidden;
     }
 
     .button:hover:not(:disabled) {
       transform: translateY(-1px);
     }
 
+    .button:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
     .button:disabled {
-      opacity: 0.55;
-      cursor: wait;
+      opacity: 0.4;
+      cursor: not-allowed;
     }
 
     .button-primary {
-      color: #fff7f2;
-      background: linear-gradient(135deg, #17333a, #0d5560);
-      box-shadow: 0 14px 34px rgba(23, 51, 58, 0.24);
+      color: #0b0f1a;
+      background: linear-gradient(135deg, var(--accent), #34d399);
+      box-shadow: 0 4px 20px rgba(110, 231, 183, 0.25);
+    }
+
+    .button-primary:hover:not(:disabled) {
+      box-shadow: 0 8px 30px rgba(110, 231, 183, 0.35);
     }
 
     .button-google {
-      color: #fff8f5;
-      background: linear-gradient(135deg, #dc5c41, #c8442f);
-      box-shadow: 0 14px 32px rgba(213, 89, 63, 0.24);
+      color: #fff;
+      background: linear-gradient(135deg, #ea4335, #d33426);
+      box-shadow: 0 4px 20px var(--google-glow);
+    }
+
+    .button-google:hover:not(:disabled) {
+      box-shadow: 0 8px 30px rgba(234, 67, 53, 0.35);
     }
 
     .button-discord {
-      color: #f1fbfd;
-      background: linear-gradient(135deg, #0d6b78, #0c4b56);
-      box-shadow: 0 14px 32px rgba(11, 104, 116, 0.24);
+      color: #fff;
+      background: linear-gradient(135deg, #5865f2, #4752c4);
+      box-shadow: 0 4px 20px var(--discord-glow);
+    }
+
+    .button-discord:hover:not(:disabled) {
+      box-shadow: 0 8px 30px rgba(88, 101, 242, 0.35);
     }
 
     .button-ghost {
       background: transparent;
-      border-color: var(--line);
+      border-color: var(--line-strong);
+      color: var(--ink-secondary);
+    }
+
+    .button-ghost:hover:not(:disabled) {
+      background: var(--surface-hover);
       color: var(--ink);
     }
 
     .button-danger {
-      color: #fff7f1;
-      background: linear-gradient(135deg, #bf543c, #9f3e2a);
-      box-shadow: 0 14px 32px rgba(182, 78, 56, 0.22);
+      color: #fff;
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      box-shadow: 0 4px 20px rgba(239, 68, 68, 0.2);
+    }
+
+    .button-danger:hover:not(:disabled) {
+      box-shadow: 0 8px 30px rgba(239, 68, 68, 0.3);
     }
 
     .subtle {
-      font-size: 14px;
+      font-size: 13px;
       color: var(--muted);
     }
 
     @media (max-width: 980px) {
+
       .hero,
       .grid {
         grid-template-columns: 1fr;
@@ -330,13 +506,17 @@
 
     @media (max-width: 680px) {
       .shell {
-        width: min(100% - 20px, 100%);
-        padding-top: 20px;
+        width: calc(100% - 24px);
+        padding-top: 24px;
       }
 
       .hero,
       .panel {
         padding: 20px;
+      }
+
+      .hero {
+        gap: 16px;
       }
 
       .metrics {
@@ -348,22 +528,19 @@
         align-items: start;
         flex-direction: column;
       }
+
+      h1 {
+        font-size: 28px;
+      }
     }
   </style>
 </head>
+
 <body>
   <main class="shell">
     <section class="hero">
-      <div>
-        <p class="eyebrow">Account Center</p>
-        <h1>同一個帳號，集中管理登入身份與裝置。</h1>
-        <p>
-          先用 Google 進來，再把 Discord 掛到同一個 YABus 帳號。若要連結的身份已經掛在別的帳號上，這裡會先攔下來，清楚告知刪除後果，等你確認才執行。
-        </p>
-      </div>
       <div class="hero-aside">
         <div class="badge" id="heroBadge">尚未登入</div>
-        <p class="subtle">目前頁面直接向同站 API 讀取帳戶資訊與 active device sessions。</p>
       </div>
     </section>
 
@@ -373,7 +550,6 @@
       <section class="panel">
         <div class="panel-header">
           <h2>帳戶資訊</h2>
-          <p>這裡顯示目前 token 指向的帳號，以及最後一次登入寫入的裝置。</p>
         </div>
         <div class="metrics" id="accountMetrics"></div>
         <div class="top-actions">
@@ -388,7 +564,6 @@
       <section class="panel">
         <div class="panel-header">
           <h2>已連結身份</h2>
-          <p>每個 provider 都會顯示 display name 與 email。沒有看到某個 provider，就代表還沒連上。</p>
         </div>
         <div class="identity-list" id="identityList"></div>
       </section>
@@ -396,7 +571,6 @@
       <section class="panel">
         <div class="panel-header">
           <h2>目前裝置</h2>
-          <p>這是目前 bearer token 對應的裝置資訊。</p>
         </div>
         <div id="currentDevice"></div>
       </section>
@@ -404,7 +578,6 @@
       <section class="panel">
         <div class="panel-header">
           <h2>已登入裝置</h2>
-          <p>只列出仍有 active token 的裝置。重新登入同一台裝置時，舊 token 會被撤銷。</p>
         </div>
         <div class="device-list" id="deviceList"></div>
       </section>
@@ -772,7 +945,7 @@
         panel.innerHTML = [
           `<h2>這個 ${escapeHtml(providerLabel(state.mergePreview.provider))} 已經掛在別的帳號上</h2>`,
           `<p>確認後，來源帳號 <span class="mono">${escapeHtml(state.mergePreview.source_account_id)}</span> 會被刪除。這個動作會保留你現在的帳號，並把本次要連結的 provider 移過來。</p>`,
-          `<p>來源帳號目前還有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份、${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台仍登入中的裝置。相關身份：${escapeHtml(identities || "-" )}。</p>`,
+          `<p>來源帳號目前還有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份、${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台仍登入中的裝置。相關身份：${escapeHtml(identities || "-")}。</p>`,
           `<div class="notice-actions"><button class="button button-danger" type="button" id="confirmMergeButton">確認連結並刪除來源帳號</button><button class="button button-ghost" type="button" id="cancelMergeButton">取消</button></div>`,
         ].join("");
         document.getElementById("confirmMergeButton").addEventListener("click", confirmMerge);
@@ -915,4 +1088,5 @@
     refreshData().then(handleFragmentState);
   </script>
 </body>
+
 </html>
