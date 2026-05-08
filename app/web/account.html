@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YABus 帳戶中心</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f3ec;
+      --surface: rgba(255, 251, 245, 0.9);
+      --surface-strong: #fffdf9;
+      --ink: #17333a;
+      --muted: #607077;
+      --line: rgba(23, 51, 58, 0.13);
+      --google: #d5593f;
+      --discord: #0b6874;
+      --success: #0f7566;
+      --warning: #b64e38;
+      --card-shadow: 0 24px 80px rgba(23, 51, 58, 0.11);
+      --radius: 26px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(213, 89, 63, 0.18), transparent 26%),
+        radial-gradient(circle at top right, rgba(11, 104, 116, 0.16), transparent 24%),
+        linear-gradient(165deg, #fcf7ef 0%, #f4efe6 52%, #edf0ec 100%);
+      font-family: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero,
+    .panel,
+    .identity,
+    .device {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--card-shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .hero {
+      padding: 32px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr);
+      gap: 18px;
+      align-items: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 240px;
+      height: 240px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(213, 89, 63, 0.16), rgba(11, 104, 116, 0.14));
+      right: -70px;
+      top: -80px;
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+    }
+
+    h1 {
+      font-size: clamp(34px, 6vw, 60px);
+      line-height: 0.96;
+      max-width: 11ch;
+    }
+
+    .hero p,
+    .panel p,
+    .device p,
+    .identity p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .hero-aside {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(23, 51, 58, 0.1);
+      background: rgba(255, 255, 255, 0.74);
+      font-weight: 700;
+      width: fit-content;
+    }
+
+    .notice {
+      padding: 18px 20px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .notice-success {
+      border-color: rgba(15, 117, 102, 0.2);
+      background: rgba(15, 117, 102, 0.08);
+    }
+
+    .notice-error {
+      border-color: rgba(182, 78, 56, 0.24);
+      background: rgba(182, 78, 56, 0.09);
+    }
+
+    .notice-info {
+      border-color: rgba(11, 104, 116, 0.2);
+      background: rgba(11, 104, 116, 0.08);
+    }
+
+    .notice-warning {
+      border-color: rgba(182, 78, 56, 0.24);
+      background: rgba(182, 78, 56, 0.1);
+    }
+
+    .notice-actions,
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 24px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
+    .panel-header {
+      display: grid;
+      gap: 8px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid rgba(23, 51, 58, 0.08);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .metric span {
+      display: block;
+      font-size: 18px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .identity-list,
+    .device-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .identity,
+    .device {
+      padding: 18px;
+      display: grid;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .identity-head,
+    .device-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 8px 12px;
+      border: 1px solid rgba(23, 51, 58, 0.1);
+      background: rgba(255, 255, 255, 0.72);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .pill-google {
+      color: var(--google);
+    }
+
+    .pill-discord {
+      color: var(--discord);
+    }
+
+    .mono {
+      font-family: "Consolas", "SFMono-Regular", monospace;
+      font-size: 13px;
+    }
+
+    .empty {
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px dashed rgba(23, 51, 58, 0.16);
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.46);
+    }
+
+    .button {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      min-height: 46px;
+      padding: 12px 18px;
+      border-radius: 15px;
+      border: 1px solid transparent;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+    }
+
+    .button:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    .button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+
+    .button-primary {
+      color: #fff7f2;
+      background: linear-gradient(135deg, #17333a, #0d5560);
+      box-shadow: 0 14px 34px rgba(23, 51, 58, 0.24);
+    }
+
+    .button-google {
+      color: #fff8f5;
+      background: linear-gradient(135deg, #dc5c41, #c8442f);
+      box-shadow: 0 14px 32px rgba(213, 89, 63, 0.24);
+    }
+
+    .button-discord {
+      color: #f1fbfd;
+      background: linear-gradient(135deg, #0d6b78, #0c4b56);
+      box-shadow: 0 14px 32px rgba(11, 104, 116, 0.24);
+    }
+
+    .button-ghost {
+      background: transparent;
+      border-color: var(--line);
+      color: var(--ink);
+    }
+
+    .button-danger {
+      color: #fff7f1;
+      background: linear-gradient(135deg, #bf543c, #9f3e2a);
+      box-shadow: 0 14px 32px rgba(182, 78, 56, 0.22);
+    }
+
+    .subtle {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 980px) {
+      .hero,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .shell {
+        width: min(100% - 20px, 100%);
+        padding-top: 20px;
+      }
+
+      .hero,
+      .panel {
+        padding: 20px;
+      }
+
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .identity-head,
+      .device-head {
+        align-items: start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Account Center</p>
+        <h1>同一個帳號，集中管理登入身份與裝置。</h1>
+        <p>
+          先用 Google 進來，再把 Discord 掛到同一個 YABus 帳號。若要連結的身份已經掛在別的帳號上，這裡會先攔下來，清楚告知刪除後果，等你確認才執行。
+        </p>
+      </div>
+      <div class="hero-aside">
+        <div class="badge" id="heroBadge">尚未登入</div>
+        <p class="subtle">目前頁面直接向同站 API 讀取帳戶資訊與 active device sessions。</p>
+      </div>
+    </section>
+
+    <section class="panel notice notice-info" id="noticePanel" hidden></section>
+
+    <section class="grid" id="dashboard">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>帳戶資訊</h2>
+          <p>這裡顯示目前 token 指向的帳號，以及最後一次登入寫入的裝置。</p>
+        </div>
+        <div class="metrics" id="accountMetrics"></div>
+        <div class="top-actions">
+          <button class="button button-primary" type="button" id="refreshButton">重新整理</button>
+          <button class="button button-google" type="button" id="linkGoogleButton">連結 Google</button>
+          <button class="button button-discord" type="button" id="linkDiscordButton">連結 Discord</button>
+          <button class="button button-ghost" type="button" id="logoutButton">登出這台裝置</button>
+          <button class="button button-danger" type="button" id="logoutAllButton">登出所有裝置</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>已連結身份</h2>
+          <p>每個 provider 都會顯示 display name 與 email。沒有看到某個 provider，就代表還沒連上。</p>
+        </div>
+        <div class="identity-list" id="identityList"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>目前裝置</h2>
+          <p>這是目前 bearer token 對應的裝置資訊。</p>
+        </div>
+        <div id="currentDevice"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>已登入裝置</h2>
+          <p>只列出仍有 active token 的裝置。重新登入同一台裝置時，舊 token 會被撤銷。</p>
+        </div>
+        <div class="device-list" id="deviceList"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const AUTH_TOKEN_COOKIE_NAME = "yabus_auth_token";
+    const STORAGE_KEYS = Object.freeze({
+      authSession: "yabus_auth_session",
+      deviceKey: "yabus_device_key",
+    });
+
+    const state = {
+      session: readSession() || restoreSessionFromCookie(),
+      account: null,
+      devices: [],
+      notice: null,
+      mergePreview: null,
+      busy: false,
+    };
+
+    function uuidv4() {
+      return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+        (Number(c) ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (Number(c) / 4)))).toString(16)
+      );
+    }
+
+    function ensureDeviceKey() {
+      const stored = localStorage.getItem(STORAGE_KEYS.deviceKey);
+      if (stored) {
+        return stored;
+      }
+      const generated = uuidv4();
+      localStorage.setItem(STORAGE_KEYS.deviceKey, generated);
+      return generated;
+    }
+
+    function readSession() {
+      const raw = localStorage.getItem(STORAGE_KEYS.authSession);
+      if (!raw) {
+        return null;
+      }
+      try {
+        return JSON.parse(raw);
+      } catch {
+        localStorage.removeItem(STORAGE_KEYS.authSession);
+        return null;
+      }
+    }
+
+    function readAuthTokenCookie() {
+      const prefix = `${AUTH_TOKEN_COOKIE_NAME}=`;
+      const match = document.cookie.split("; ").find((entry) => entry.startsWith(prefix));
+      if (!match) {
+        return "";
+      }
+      return decodeURIComponent(match.slice(prefix.length));
+    }
+
+    function setAuthTokenCookie(token) {
+      document.cookie = `${AUTH_TOKEN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
+    }
+
+    function clearAuthTokenCookie() {
+      document.cookie = `${AUTH_TOKEN_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+    }
+
+    function restoreSessionFromCookie() {
+      const token = readAuthTokenCookie();
+      if (!token) {
+        return null;
+      }
+      const session = {
+        token,
+        accountId: "",
+        deviceId: "",
+        role: "user",
+        provider: "",
+        displayName: "",
+        storedAt: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEYS.authSession, JSON.stringify(session));
+      return session;
+    }
+
+    function writeSession(session) {
+      state.session = session;
+      if (!session) {
+        localStorage.removeItem(STORAGE_KEYS.authSession);
+        clearAuthTokenCookie();
+        return;
+      }
+      localStorage.setItem(STORAGE_KEYS.authSession, JSON.stringify(session));
+      setAuthTokenCookie(session.token);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[char]));
+    }
+
+    function providerLabel(provider) {
+      return provider === "google" ? "Google" : provider === "discord" ? "Discord" : provider || "Unknown";
+    }
+
+    function providerClass(provider) {
+      return provider === "google" ? "pill-google" : provider === "discord" ? "pill-discord" : "";
+    }
+
+    function formatTime(epochSeconds) {
+      if (!epochSeconds) {
+        return "-";
+      }
+      return new Date(Number(epochSeconds) * 1000).toLocaleString("zh-TW", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function maskDeviceKey(value) {
+      if (!value) {
+        return "-";
+      }
+      if (value.length <= 18) {
+        return value;
+      }
+      return `${value.slice(0, 8)}...${value.slice(-8)}`;
+    }
+
+    function authHeaders() {
+      if (!state.session || !state.session.token) {
+        return {};
+      }
+      return { Authorization: `Bearer ${state.session.token}` };
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, options);
+      const isJson = (response.headers.get("content-type") || "").includes("application/json");
+      const payload = isJson ? await response.json() : null;
+      if (!response.ok) {
+        if (response.status === 401) {
+          writeSession(null);
+          if (window.location.pathname === "/account") {
+            window.location.replace("/auth");
+          }
+        }
+        const message = payload && payload.detail ? payload.detail : `HTTP ${response.status}`;
+        throw new Error(message);
+      }
+      return payload;
+    }
+
+    function setBusy(value) {
+      state.busy = value;
+      render();
+    }
+
+    function setNotice(tone, title, message) {
+      state.mergePreview = null;
+      state.notice = { tone, title, message };
+      renderNotice();
+    }
+
+    function clearNotice() {
+      state.notice = null;
+      state.mergePreview = null;
+      renderNotice();
+    }
+
+    function parseFragment() {
+      const params = new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "");
+      if (!window.location.hash) {
+        return params;
+      }
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      return params;
+    }
+
+    async function handleFragmentState() {
+      const params = parseFragment();
+      const error = params.get("error");
+      if (error) {
+        setNotice("error", "流程沒有完成", error);
+        return;
+      }
+
+      const linkStatus = params.get("link_status");
+      const provider = params.get("provider");
+      const mergeToken = params.get("merge_token");
+
+      if (linkStatus === "linked") {
+        setNotice("success", "連結完成", `${providerLabel(provider)} 已掛到目前帳號。`);
+        await refreshData();
+        return;
+      }
+
+      if (linkStatus === "already_linked") {
+        setNotice("info", "不需要再次連結", `${providerLabel(provider)} 已經在這個帳號上。`);
+        await refreshData();
+        return;
+      }
+
+      if (linkStatus === "merge_required" && mergeToken) {
+        await loadMergePreview(mergeToken);
+      }
+    }
+
+    async function refreshData() {
+      if (!state.session || !state.session.token) {
+        state.account = null;
+        state.devices = [];
+        render();
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const [account, devices] = await Promise.all([
+          requestJson("/api/v1/auth/me", { headers: authHeaders() }),
+          requestJson("/api/v1/auth/devices", { headers: authHeaders() }),
+        ]);
+        state.account = account;
+        state.devices = devices.devices || [];
+      } catch (error) {
+        state.account = null;
+        state.devices = [];
+        setNotice("error", "無法載入帳戶資料", error.message || String(error));
+      } finally {
+        setBusy(false);
+        render();
+      }
+    }
+
+    async function startLink(provider) {
+      setBusy(true);
+      try {
+        const payload = await requestJson(`/api/v1/auth/link/${provider}-start`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({ platform: "web" }),
+        });
+        window.location.href = payload.authorization_url;
+      } catch (error) {
+        setBusy(false);
+        setNotice("error", "無法開始連結", error.message || String(error));
+      }
+    }
+
+    async function loadMergePreview(mergeToken) {
+      setBusy(true);
+      try {
+        const preview = await requestJson(`/api/v1/auth/link/pending?merge_token=${encodeURIComponent(mergeToken)}`, {
+          headers: authHeaders(),
+        });
+        state.notice = null;
+        state.mergePreview = {
+          ...preview,
+          merge_token: mergeToken,
+        };
+      } catch (error) {
+        setNotice("error", "無法取得連結確認資訊", error.message || String(error));
+      } finally {
+        setBusy(false);
+        renderNotice();
+      }
+    }
+
+    async function confirmMerge() {
+      if (!state.mergePreview) {
+        return;
+      }
+      setBusy(true);
+      try {
+        const result = await requestJson("/api/v1/auth/link/confirm", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({ merge_token: state.mergePreview.merge_token }),
+        });
+        setNotice("success", "帳號已合併", `${providerLabel(result.provider)} 已被移到目前帳號，來源帳號已刪除。`);
+        await refreshData();
+      } catch (error) {
+        setNotice("error", "無法完成合併", error.message || String(error));
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function logoutCurrentDevice() {
+      if (!state.session || !state.session.token) {
+        return;
+      }
+      setBusy(true);
+      try {
+        await requestJson("/api/v1/auth/logout", {
+          method: "POST",
+          headers: authHeaders(),
+        });
+        writeSession(null);
+        state.account = null;
+        state.devices = [];
+        window.location.replace("/auth");
+      } catch (error) {
+        setNotice("error", "登出失敗", error.message || String(error));
+      } finally {
+        setBusy(false);
+        render();
+      }
+    }
+
+    async function logoutAllDevices() {
+      if (!state.session || !state.session.token) {
+        return;
+      }
+      setBusy(true);
+      try {
+        await requestJson("/api/v1/auth/logout-all", {
+          method: "POST",
+          headers: authHeaders(),
+        });
+        writeSession(null);
+        state.account = null;
+        state.devices = [];
+        window.location.replace("/auth");
+      } catch (error) {
+        setNotice("error", "無法登出所有裝置", error.message || String(error));
+      } finally {
+        setBusy(false);
+        render();
+      }
+    }
+
+    function renderHeroBadge() {
+      const badge = document.getElementById("heroBadge");
+      if (!state.session || !state.session.token) {
+        badge.textContent = "尚未登入";
+        return;
+      }
+      badge.textContent = `${providerLabel(state.session.provider)} / ${state.session.displayName || "已登入"}`;
+    }
+
+    function renderNotice() {
+      const panel = document.getElementById("noticePanel");
+      if (state.mergePreview) {
+        const identities = (state.mergePreview.source_identities || [])
+          .map((identity) => providerLabel(identity.provider))
+          .join(" , ");
+        panel.hidden = false;
+        panel.className = "panel notice notice-warning";
+        panel.innerHTML = [
+          `<h2>這個 ${escapeHtml(providerLabel(state.mergePreview.provider))} 已經掛在別的帳號上</h2>`,
+          `<p>確認後，來源帳號 <span class="mono">${escapeHtml(state.mergePreview.source_account_id)}</span> 會被刪除。這個動作會保留你現在的帳號，並把本次要連結的 provider 移過來。</p>`,
+          `<p>來源帳號目前還有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份、${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台仍登入中的裝置。相關身份：${escapeHtml(identities || "-" )}。</p>`,
+          `<div class="notice-actions"><button class="button button-danger" type="button" id="confirmMergeButton">確認連結並刪除來源帳號</button><button class="button button-ghost" type="button" id="cancelMergeButton">取消</button></div>`,
+        ].join("");
+        document.getElementById("confirmMergeButton").addEventListener("click", confirmMerge);
+        document.getElementById("cancelMergeButton").addEventListener("click", clearNotice);
+        return;
+      }
+
+      if (!state.notice) {
+        panel.hidden = true;
+        panel.innerHTML = "";
+        return;
+      }
+
+      panel.hidden = false;
+      panel.className = `panel notice notice-${state.notice.tone}`;
+      panel.innerHTML = [
+        `<h2>${escapeHtml(state.notice.title)}</h2>`,
+        `<p>${escapeHtml(state.notice.message)}</p>`,
+      ].join("");
+    }
+
+    function renderAccountMetrics() {
+      const root = document.getElementById("accountMetrics");
+      if (!state.account) {
+        root.innerHTML = "<div class=\"empty\">尚未取得帳戶資料。</div>";
+        return;
+      }
+
+      const metrics = [
+        ["帳號 ID", state.account.account_id],
+        ["權限", state.account.role],
+        ["建立時間", formatTime(state.account.created_at)],
+        ["更新時間", formatTime(state.account.updated_at)],
+      ];
+
+      root.innerHTML = metrics.map(([label, value]) => `
+        <article class="metric">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(value || "-")}</span>
+        </article>
+      `).join("");
+    }
+
+    function renderIdentities() {
+      const root = document.getElementById("identityList");
+      const identities = state.account && Array.isArray(state.account.identities) ? state.account.identities : [];
+      if (!identities.length) {
+        root.innerHTML = '<div class="empty">還沒有任何 linked provider。</div>';
+        return;
+      }
+      root.innerHTML = identities.map((identity) => `
+        <article class="identity">
+          <div class="identity-head">
+            <h3>${escapeHtml(identity.display_name || providerLabel(identity.provider))}</h3>
+            <span class="pill ${providerClass(identity.provider)}">${escapeHtml(providerLabel(identity.provider))}</span>
+          </div>
+          <p>${escapeHtml(identity.email || "沒有 email")}</p>
+          <p class="mono">${escapeHtml(identity.provider_user_id || "-")}</p>
+        </article>
+      `).join("");
+    }
+
+    function renderCurrentDevice() {
+      const root = document.getElementById("currentDevice");
+      if (!state.account || !state.account.device) {
+        root.innerHTML = '<div class="empty">沒有目前裝置資訊。</div>';
+        return;
+      }
+      const device = state.account.device;
+      root.innerHTML = `
+        <article class="device">
+          <div class="device-head">
+            <h3>這台裝置</h3>
+            <span class="pill">目前 token</span>
+          </div>
+          <p class="mono">${escapeHtml(maskDeviceKey(device.device_key))}</p>
+          <p>建立：${escapeHtml(formatTime(device.created_at))}</p>
+          <p>最近使用：${escapeHtml(formatTime(device.last_seen_at))}</p>
+        </article>
+      `;
+    }
+
+    function renderDevices() {
+      const root = document.getElementById("deviceList");
+      if (!state.devices.length) {
+        root.innerHTML = '<div class="empty">目前沒有其他 active device sessions。</div>';
+        return;
+      }
+      root.innerHTML = state.devices.map((device) => `
+        <article class="device">
+          <div class="device-head">
+            <h3>${device.is_current ? "目前裝置" : "其他裝置"}</h3>
+            <span class="pill">${device.is_current ? "Current" : "Active"}</span>
+          </div>
+          <p class="mono">${escapeHtml(maskDeviceKey(device.device_key))}</p>
+          <p>裝置 ID：${escapeHtml(device.device_id)}</p>
+          <p>Token 建立：${escapeHtml(formatTime(device.token_created_at))}</p>
+          <p>最近使用：${escapeHtml(formatTime(device.token_last_used_at || device.last_seen_at))}</p>
+        </article>
+      `).join("");
+    }
+
+    function renderButtons() {
+      const linkedProviders = new Set((state.account && state.account.identities || []).map((identity) => identity.provider));
+      const linkGoogleButton = document.getElementById("linkGoogleButton");
+      const linkDiscordButton = document.getElementById("linkDiscordButton");
+      const refreshButton = document.getElementById("refreshButton");
+      const logoutButton = document.getElementById("logoutButton");
+      const logoutAllButton = document.getElementById("logoutAllButton");
+
+      linkGoogleButton.disabled = state.busy || linkedProviders.has("google");
+      linkDiscordButton.disabled = state.busy || linkedProviders.has("discord");
+      refreshButton.disabled = state.busy;
+      logoutButton.disabled = state.busy;
+      logoutAllButton.disabled = state.busy;
+
+      linkGoogleButton.textContent = linkedProviders.has("google") ? "Google 已連結" : "連結 Google";
+      linkDiscordButton.textContent = linkedProviders.has("discord") ? "Discord 已連結" : "連結 Discord";
+    }
+
+    function render() {
+      renderHeroBadge();
+      renderNotice();
+
+      renderAccountMetrics();
+      renderIdentities();
+      renderCurrentDevice();
+      renderDevices();
+      renderButtons();
+    }
+
+    document.getElementById("refreshButton").addEventListener("click", refreshData);
+    document.getElementById("linkGoogleButton").addEventListener("click", () => startLink("google"));
+    document.getElementById("linkDiscordButton").addEventListener("click", () => startLink("discord"));
+    document.getElementById("logoutButton").addEventListener("click", logoutCurrentDevice);
+    document.getElementById("logoutAllButton").addEventListener("click", logoutAllDevices);
+
+    ensureDeviceKey();
+    render();
+    refreshData().then(handleFragmentState);
+  </script>
+</body>
+</html>

@@ -83,6 +83,41 @@ class AuthLoginResult:
     redirect_uri: str
 
 
+@dataclass(frozen=True)
+class AuthLinkResult:
+    account_id: int
+    provider: AuthProvider
+    status: Literal["linked", "already_linked", "merge_required"]
+    redirect_uri: str
+    merge_token: str | None = None
+
+
+@dataclass(frozen=True)
+class AuthFlowResult:
+    kind: Literal["login", "link"]
+    redirect_uri: str
+    login_result: AuthLoginResult | None = None
+    link_result: AuthLinkResult | None = None
+
+
+@dataclass(frozen=True)
+class AccountIdentitySummary:
+    provider: AuthProvider
+    email: str | None
+    display_name: str | None
+
+
+@dataclass(frozen=True)
+class PendingAccountMergePreview:
+    merge_token: str
+    provider: AuthProvider
+    target_account_id: int
+    source_account_id: int
+    expires_at: int
+    source_identities: tuple[AccountIdentitySummary, ...]
+    active_device_count: int
+
+
 class SnowflakeGenerator:
     def __init__(self, node_id: int) -> None:
         if node_id < 0 or node_id > 1023:
@@ -110,6 +145,7 @@ class SnowflakeGenerator:
 
 _snowflake_generators: dict[int, SnowflakeGenerator] = {}
 _snowflake_generators_lock = threading.Lock()
+_ROLE_PRIORITY = {"user": 0, "mod": 1, "admin": 2}
 
 
 def generate_snowflake(settings: Settings) -> int:
@@ -226,6 +262,38 @@ def create_oauth_state(
     return state
 
 
+def create_link_oauth_state_context(
+    settings: Settings,
+    *,
+    state: str,
+    target_account_id: int,
+) -> None:
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO auth_link_state_contexts
+                (state_hash, target_account_id, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(state_hash) DO UPDATE SET
+                target_account_id = excluded.target_account_id,
+                created_at = excluded.created_at,
+                expires_at = excluded.expires_at
+            """,
+            (
+                _sha256(state),
+                target_account_id,
+                now,
+                now + settings.auth_state_ttl_seconds,
+            ),
+        )
+        connection.execute(
+            "DELETE FROM auth_link_state_contexts WHERE expires_at < ?",
+            (now,),
+        )
+        connection.commit()
+
+
 def consume_oauth_state(
     settings: Settings,
     *,
@@ -269,6 +337,33 @@ def consume_oauth_state(
     )
 
 
+def _consume_link_oauth_state_context(
+    settings: Settings,
+    *,
+    state: str,
+) -> int | None:
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT target_account_id, expires_at
+            FROM auth_link_state_contexts
+            WHERE state_hash = ?
+            """,
+            (_sha256(state),),
+        ).fetchone()
+        if row is None:
+            return None
+        connection.execute(
+            "DELETE FROM auth_link_state_contexts WHERE state_hash = ?",
+            (_sha256(state),),
+        )
+        connection.commit()
+    if int(row["expires_at"]) < now:
+        raise AuthError("OAuth state expired.")
+    return int(row["target_account_id"])
+
+
 def build_authorization_url(
     settings: Settings,
     *,
@@ -307,7 +402,26 @@ def complete_oauth_login(
     code: str,
     state: str,
 ) -> AuthLoginResult:
+    result = complete_oauth_flow(
+        settings,
+        provider=provider,
+        code=code,
+        state=state,
+    )
+    if result.login_result is None:
+        raise AuthError("OAuth callback was not a login flow.", status_code=400)
+    return result.login_result
+
+
+def complete_oauth_flow(
+    settings: Settings,
+    *,
+    provider: AuthProvider,
+    code: str,
+    state: str,
+) -> AuthFlowResult:
     oauth_state = consume_oauth_state(settings, provider=provider, state=state)
+    target_account_id = _consume_link_oauth_state_context(settings, state=state)
     try:
         identity = _exchange_code_for_identity(
             settings,
@@ -318,11 +432,29 @@ def complete_oauth_login(
     except AuthError as exc:
         exc.redirect_uri = oauth_state.redirect_uri
         raise
-    return _upsert_login(
+    if target_account_id is None:
+        login_result = _upsert_login(
+            settings,
+            identity=identity,
+            device_key=oauth_state.device_key,
+            redirect_uri=oauth_state.redirect_uri,
+        )
+        return AuthFlowResult(
+            kind="login",
+            redirect_uri=oauth_state.redirect_uri,
+            login_result=login_result,
+        )
+
+    link_result = link_oauth_identity(
         settings,
+        target_account_id=target_account_id,
         identity=identity,
-        device_key=oauth_state.device_key,
         redirect_uri=oauth_state.redirect_uri,
+    )
+    return AuthFlowResult(
+        kind="link",
+        redirect_uri=oauth_state.redirect_uri,
+        link_result=link_result,
     )
 
 
@@ -552,28 +684,11 @@ def _upsert_login(
                     (account_id, now, now),
                 )
 
-            connection.execute(
-                """
-                INSERT INTO account_oauth_identities
-                    (provider, provider_user_id, account_id, email, display_name, avatar_url, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(provider, provider_user_id) DO UPDATE SET
-                    account_id = excluded.account_id,
-                    email = excluded.email,
-                    display_name = excluded.display_name,
-                    avatar_url = excluded.avatar_url,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    identity.provider,
-                    identity.provider_user_id,
-                    account_id,
-                    identity.email,
-                    identity.display_name,
-                    identity.avatar_url,
-                    now,
-                    now,
-                ),
+            _upsert_oauth_identity_row(
+                connection,
+                account_id=account_id,
+                identity=identity,
+                now=now,
             )
 
             if device_row is None:
@@ -639,9 +754,228 @@ def _upsert_login(
     )
 
 
+def link_oauth_identity(
+    settings: Settings,
+    *,
+    target_account_id: int,
+    identity: OAuthIdentity,
+    redirect_uri: str,
+) -> AuthLinkResult:
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            target_row = connection.execute(
+                "SELECT id FROM accounts WHERE id = ?",
+                (target_account_id,),
+            ).fetchone()
+            if target_row is None:
+                raise AuthError("Authentication required.", status_code=401)
+
+            identity_row = connection.execute(
+                """
+                SELECT account_id
+                FROM account_oauth_identities
+                WHERE provider = ? AND provider_user_id = ?
+                """,
+                (identity.provider, identity.provider_user_id),
+            ).fetchone()
+
+            if identity_row is None:
+                _upsert_oauth_identity_row(
+                    connection,
+                    account_id=target_account_id,
+                    identity=identity,
+                    now=now,
+                )
+                connection.execute(
+                    "UPDATE accounts SET updated_at = ? WHERE id = ?",
+                    (now, target_account_id),
+                )
+                connection.commit()
+                return AuthLinkResult(
+                    account_id=target_account_id,
+                    provider=identity.provider,
+                    status="linked",
+                    redirect_uri=redirect_uri,
+                )
+
+            source_account_id = int(identity_row["account_id"])
+            if source_account_id == target_account_id:
+                _upsert_oauth_identity_row(
+                    connection,
+                    account_id=target_account_id,
+                    identity=identity,
+                    now=now,
+                )
+                connection.execute(
+                    "UPDATE accounts SET updated_at = ? WHERE id = ?",
+                    (now, target_account_id),
+                )
+                connection.commit()
+                return AuthLinkResult(
+                    account_id=target_account_id,
+                    provider=identity.provider,
+                    status="already_linked",
+                    redirect_uri=redirect_uri,
+                )
+
+            merge_token = _create_pending_account_merge(
+                connection,
+                settings,
+                target_account_id=target_account_id,
+                source_account_id=source_account_id,
+                identity=identity,
+                now=now,
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return AuthLinkResult(
+        account_id=target_account_id,
+        provider=identity.provider,
+        status="merge_required",
+        redirect_uri=redirect_uri,
+        merge_token=merge_token,
+    )
+
+
+def get_pending_account_merge(
+    settings: Settings,
+    *,
+    target_account_id: int,
+    merge_token: str,
+) -> PendingAccountMergePreview:
+    row = _get_pending_account_merge_row(
+        settings,
+        target_account_id=target_account_id,
+        merge_token=merge_token,
+    )
+    source_account_id = int(row["source_account_id"])
+    with get_connection(settings.db_path) as connection:
+        identity_rows = connection.execute(
+            """
+            SELECT provider, email, display_name
+            FROM account_oauth_identities
+            WHERE account_id = ?
+            ORDER BY provider, provider_user_id
+            """,
+            (source_account_id,),
+        ).fetchall()
+        active_device_row = connection.execute(
+            """
+            SELECT COUNT(*) AS device_count
+            FROM account_devices d
+            JOIN account_device_tokens t
+              ON t.device_id = d.id
+             AND t.revoked_at IS NULL
+            WHERE d.account_id = ?
+            """,
+            (source_account_id,),
+        ).fetchone()
+
+    if not identity_rows:
+        raise AuthError("Linked account is no longer available.", status_code=409)
+
+    return PendingAccountMergePreview(
+        merge_token=merge_token,
+        provider=row["provider"],
+        target_account_id=target_account_id,
+        source_account_id=source_account_id,
+        expires_at=int(row["expires_at"]),
+        source_identities=tuple(
+            AccountIdentitySummary(
+                provider=identity_row["provider"],
+                email=identity_row["email"],
+                display_name=identity_row["display_name"],
+            )
+            for identity_row in identity_rows
+        ),
+        active_device_count=int(active_device_row["device_count"] if active_device_row else 0),
+    )
+
+
+def confirm_account_merge(
+    settings: Settings,
+    *,
+    target_account_id: int,
+    merge_token: str,
+) -> AuthLinkResult:
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = _get_pending_account_merge_row(
+                settings,
+                target_account_id=target_account_id,
+                merge_token=merge_token,
+                connection=connection,
+            )
+            source_account_id = int(row["source_account_id"])
+            provider = row["provider"]
+            provider_user_id = row["provider_user_id"]
+
+            target_account_row = connection.execute(
+                "SELECT role FROM accounts WHERE id = ?",
+                (target_account_id,),
+            ).fetchone()
+            source_account_row = connection.execute(
+                "SELECT role FROM accounts WHERE id = ?",
+                (source_account_id,),
+            ).fetchone()
+            if target_account_row is None or source_account_row is None:
+                raise AuthError("Linked account is no longer available.", status_code=409)
+
+            identity_row = connection.execute(
+                """
+                SELECT 1
+                FROM account_oauth_identities
+                WHERE provider = ? AND provider_user_id = ? AND account_id = ?
+                """,
+                (provider, provider_user_id, source_account_id),
+            ).fetchone()
+            if identity_row is None:
+                raise AuthError("Linked identity is no longer available.", status_code=409)
+
+            connection.execute(
+                """
+                UPDATE account_oauth_identities
+                SET account_id = ?, updated_at = ?
+                WHERE provider = ? AND provider_user_id = ? AND account_id = ?
+                """,
+                (target_account_id, now, provider, provider_user_id, source_account_id),
+            )
+            connection.execute(
+                "UPDATE accounts SET role = ?, updated_at = ? WHERE id = ?",
+                (
+                    _merge_roles(target_account_row["role"], source_account_row["role"]),
+                    now,
+                    target_account_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE auth_pending_account_merges SET consumed_at = ? WHERE token_hash = ?",
+                (now, _sha256(merge_token)),
+            )
+            connection.execute("DELETE FROM accounts WHERE id = ?", (source_account_id,))
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return AuthLinkResult(
+        account_id=target_account_id,
+        provider=provider,
+        status="linked",
+        redirect_uri="",
+    )
+
+
 def build_login_redirect_url(redirect_uri: str, result: AuthLoginResult) -> str:
-    parsed = urlparse(redirect_uri)
-    payload = urlencode(
+    return build_fragment_redirect_url(
+        redirect_uri,
         {
             "token": result.token,
             "account_id": str(result.account_id),
@@ -649,24 +983,27 @@ def build_login_redirect_url(redirect_uri: str, result: AuthLoginResult) -> str:
             "role": result.role,
             "provider": result.provider,
             "display_name": result.display_name or "",
-        }
-    )
-    fragment = f"{parsed.fragment}&{payload}" if parsed.fragment else payload
-    return urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            fragment,
-        )
+        },
     )
 
 
 def build_error_redirect_url(redirect_uri: str, message: str) -> str:
+    return build_fragment_redirect_url(redirect_uri, {"error": message})
+
+
+def build_link_redirect_url(redirect_uri: str, result: AuthLinkResult) -> str:
+    payload = {
+        "link_status": result.status,
+        "provider": result.provider,
+    }
+    if result.merge_token:
+        payload["merge_token"] = result.merge_token
+    return build_fragment_redirect_url(redirect_uri, payload)
+
+
+def build_fragment_redirect_url(redirect_uri: str, params: dict[str, str]) -> str:
     parsed = urlparse(redirect_uri)
-    payload = urlencode({"error": message})
+    payload = urlencode(params)
     fragment = f"{parsed.fragment}&{payload}" if parsed.fragment else payload
     return urlunparse(
         (
@@ -739,8 +1076,37 @@ def revoke_token(settings: Settings, principal: AuthPrincipal) -> None:
         connection.commit()
 
 
+def revoke_all_tokens(settings: Settings, principal: AuthPrincipal) -> None:
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        connection.execute(
+            """
+            UPDATE account_device_tokens
+            SET revoked_at = ?
+            WHERE account_id = ? AND revoked_at IS NULL
+            """,
+            (now, principal.account_id),
+        )
+        connection.commit()
+
+
+def get_device_key(settings: Settings, device_id: int) -> str:
+    with get_connection(settings.db_path) as connection:
+        row = connection.execute(
+            "SELECT device_key FROM account_devices WHERE id = ?",
+            (device_id,),
+        ).fetchone()
+    if row is None:
+        raise AuthError("Authentication required.", status_code=401)
+    return row["device_key"]
+
+
 def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, Any]:
     with get_connection(settings.db_path) as connection:
+        account_row = connection.execute(
+            "SELECT created_at, updated_at FROM accounts WHERE id = ?",
+            (principal.account_id,),
+        ).fetchone()
         identity_rows = connection.execute(
             """
             SELECT provider, provider_user_id, email, display_name, avatar_url
@@ -762,6 +1128,8 @@ def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, A
         "account_id": str(principal.account_id),
         "device_id": str(principal.device_id),
         "role": principal.role,
+        "created_at": int(account_row["created_at"]) if account_row else None,
+        "updated_at": int(account_row["updated_at"]) if account_row else None,
         "device": {
             "device_key": device_row["device_key"] if device_row else None,
             "created_at": int(device_row["created_at"]) if device_row else None,
@@ -778,3 +1146,148 @@ def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, A
             for row in identity_rows
         ],
     }
+
+
+def account_devices_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, Any]:
+    with get_connection(settings.db_path) as connection:
+        device_rows = connection.execute(
+            """
+            SELECT
+                d.id,
+                d.device_key,
+                d.created_at,
+                d.last_seen_at,
+                t.created_at AS token_created_at,
+                t.last_used_at AS token_last_used_at
+            FROM account_devices d
+            JOIN account_device_tokens t
+              ON t.device_id = d.id
+             AND t.revoked_at IS NULL
+            WHERE d.account_id = ?
+            ORDER BY
+                CASE WHEN d.id = ? THEN 0 ELSE 1 END,
+                t.last_used_at DESC,
+                d.created_at DESC
+            """,
+            (principal.account_id, principal.device_id),
+        ).fetchall()
+    return {
+        "account_id": str(principal.account_id),
+        "current_device_id": str(principal.device_id),
+        "devices": [
+            {
+                "device_id": str(row["id"]),
+                "device_key": row["device_key"],
+                "created_at": int(row["created_at"]),
+                "last_seen_at": int(row["last_seen_at"]),
+                "token_created_at": int(row["token_created_at"]),
+                "token_last_used_at": int(row["token_last_used_at"]),
+                "is_current": int(row["id"]) == principal.device_id,
+            }
+            for row in device_rows
+        ],
+    }
+
+
+def _upsert_oauth_identity_row(
+    connection: Any,
+    *,
+    account_id: int,
+    identity: OAuthIdentity,
+    now: int,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO account_oauth_identities
+            (provider, provider_user_id, account_id, email, display_name, avatar_url, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, provider_user_id) DO UPDATE SET
+            account_id = excluded.account_id,
+            email = excluded.email,
+            display_name = excluded.display_name,
+            avatar_url = excluded.avatar_url,
+            updated_at = excluded.updated_at
+        """,
+        (
+            identity.provider,
+            identity.provider_user_id,
+            account_id,
+            identity.email,
+            identity.display_name,
+            identity.avatar_url,
+            now,
+            now,
+        ),
+    )
+
+
+def _create_pending_account_merge(
+    connection: Any,
+    settings: Settings,
+    *,
+    target_account_id: int,
+    source_account_id: int,
+    identity: OAuthIdentity,
+    now: int,
+) -> str:
+    merge_token = secrets.token_urlsafe(32)
+    connection.execute(
+        "DELETE FROM auth_pending_account_merges WHERE expires_at < ? OR consumed_at IS NOT NULL",
+        (now,),
+    )
+    connection.execute(
+        """
+        INSERT INTO auth_pending_account_merges
+            (token_hash, target_account_id, source_account_id, provider, provider_user_id, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _sha256(merge_token),
+            target_account_id,
+            source_account_id,
+            identity.provider,
+            identity.provider_user_id,
+            now,
+            now + settings.auth_state_ttl_seconds,
+        ),
+    )
+    return merge_token
+
+
+def _get_pending_account_merge_row(
+    settings: Settings,
+    *,
+    target_account_id: int,
+    merge_token: str,
+    connection: Any | None = None,
+) -> Any:
+    now = int(time.time())
+    owns_connection = connection is None
+    if connection is None:
+        context = get_connection(settings.db_path)
+        connection = context.__enter__()
+    try:
+        row = connection.execute(
+            """
+            SELECT source_account_id, provider, provider_user_id, expires_at, consumed_at
+            FROM auth_pending_account_merges
+            WHERE token_hash = ? AND target_account_id = ?
+            """,
+            (_sha256(merge_token), target_account_id),
+        ).fetchone()
+        if row is None:
+            raise AuthError("Account merge request was not found.", status_code=404)
+        if row["consumed_at"] is not None:
+            raise AuthError("Account merge request was already used.", status_code=409)
+        if int(row["expires_at"]) < now:
+            raise AuthError("Account merge request expired.", status_code=410)
+        return row
+    finally:
+        if owns_connection:
+            context.__exit__(None, None, None)
+
+
+def _merge_roles(current_role: str, source_role: str) -> str:
+    if _ROLE_PRIORITY.get(source_role, 0) > _ROLE_PRIORITY.get(current_role, 0):
+        return source_role
+    return current_role

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YABus 登入完成</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef2eb;
+      --surface: rgba(255, 255, 255, 0.88);
+      --ink: #143239;
+      --muted: #60737a;
+      --line: rgba(20, 50, 57, 0.14);
+      --success: #0f7566;
+      --error: #b94731;
+      --button: #173239;
+      --shadow: 0 22px 70px rgba(20, 50, 57, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top, rgba(15, 117, 102, 0.22), transparent 28%),
+        linear-gradient(160deg, #f7faf5 0%, #edf2ea 60%, #e8ede9 100%);
+      font-family: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+    }
+
+    .card {
+      width: min(540px, 100%);
+      padding: 32px;
+      border-radius: 28px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      font-size: clamp(30px, 6vw, 46px);
+      line-height: 1.02;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .status {
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .status-success {
+      border-color: rgba(15, 117, 102, 0.22);
+      background: rgba(15, 117, 102, 0.08);
+    }
+
+    .status-error {
+      border-color: rgba(185, 71, 49, 0.22);
+      background: rgba(185, 71, 49, 0.08);
+    }
+
+    .actions {
+      display: grid;
+      gap: 12px;
+    }
+
+    .button {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 50px;
+      padding: 12px 18px;
+      border-radius: 16px;
+      font: inherit;
+      font-weight: 700;
+      text-decoration: none;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+
+    .button-primary {
+      background: var(--button);
+      color: #fff;
+    }
+
+    .button-secondary {
+      border-color: var(--line);
+      color: var(--ink);
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1 id="title">處理登入結果中</h1>
+    <p id="subtitle">正在接收 OAuth callback。</p>
+    <section class="status" id="statusBox"></section>
+    <div class="actions">
+      <a class="button button-primary" href="/account">前往帳戶頁</a>
+      <a class="button button-secondary" href="/auth">回到登入頁</a>
+    </div>
+  </main>
+
+  <script>
+    const AUTH_TOKEN_COOKIE_NAME = "yabus_auth_token";
+    const STORAGE_KEYS = Object.freeze({
+      authSession: "yabus_auth_session",
+    });
+
+    function setAuthTokenCookie(token) {
+      document.cookie = `${AUTH_TOKEN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
+    }
+
+    function clearAuthTokenCookie() {
+      document.cookie = `${AUTH_TOKEN_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[char]));
+    }
+
+    function readHashParams() {
+      return new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "");
+    }
+
+    function saveSession(params) {
+      const token = params.get("token");
+      if (!token) {
+        return null;
+      }
+      const session = {
+        token,
+        accountId: params.get("account_id") || "",
+        deviceId: params.get("device_id") || "",
+        role: params.get("role") || "user",
+        provider: params.get("provider") || "",
+        displayName: params.get("display_name") || "",
+        storedAt: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEYS.authSession, JSON.stringify(session));
+      setAuthTokenCookie(token);
+      return session;
+    }
+
+    function showStatus(kind, title, subtitle, body) {
+      document.getElementById("title").textContent = title;
+      document.getElementById("subtitle").textContent = subtitle;
+      const box = document.getElementById("statusBox");
+      box.className = `status ${kind === "error" ? "status-error" : "status-success"}`;
+      box.innerHTML = body;
+    }
+
+    (function init() {
+      const params = readHashParams();
+      const error = params.get("error");
+      const session = saveSession(params);
+      if (window.location.hash) {
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+
+      if (error) {
+        clearAuthTokenCookie();
+        showStatus(
+          "error",
+          "登入沒有完成",
+          "OAuth 流程回傳了錯誤。",
+          `<strong>錯誤原因：</strong> ${escapeHtml(error)}`,
+        );
+        return;
+      }
+
+      if (!session) {
+        clearAuthTokenCookie();
+        showStatus(
+          "error",
+          "沒有收到登入資訊",
+          "Callback 已抵達，但 fragment 內沒有 token。",
+          "請回到登入頁重試。",
+        );
+        return;
+      }
+
+      showStatus(
+        "success",
+        "登入完成",
+        "登入資訊已寫入本機，準備切到帳戶頁。",
+        [
+          `<strong>${escapeHtml(session.displayName || "YABus 使用者")}</strong>`,
+          `<div>登入方式：${escapeHtml(session.provider || "unknown")}</div>`,
+          `<div>帳號 ID：${escapeHtml(session.accountId || "-")}</div>`,
+        ].join(""),
+      );
+
+      window.setTimeout(() => {
+        window.location.replace("/account");
+      }, 1100);
+    }());
+  </script>
+</body>
+</html>

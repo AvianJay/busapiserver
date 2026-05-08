@@ -20,7 +20,7 @@ def get_analytics(
     return build_analytics_report(settings.db_path, days=days, limit=limit)
 
 
-@router.get("/analytics", response_class=HTMLResponse)
+@router.get("/analytics", include_in_schema=False, response_class=HTMLResponse)
 def analytics_dashboard() -> HTMLResponse:
     return HTMLResponse(_analytics_dashboard_html())
 

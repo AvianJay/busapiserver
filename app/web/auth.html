@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YABus 帳號登入</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6efe5;
+      --surface: rgba(255, 252, 247, 0.9);
+      --surface-strong: #fffaf2;
+      --ink: #17313a;
+      --muted: #5f6d73;
+      --line: rgba(23, 49, 58, 0.14);
+      --google: #d65138;
+      --discord: #0d6b78;
+      --accent: #f3b45a;
+      --shadow: 0 24px 70px rgba(23, 49, 58, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(243, 180, 90, 0.34), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(13, 107, 120, 0.2), transparent 28%),
+        linear-gradient(160deg, #fbf5ec 0%, #f2ebe1 52%, #e7ebe8 100%);
+      font-family: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    main {
+      width: min(980px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 440px);
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .hero,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--surface);
+      backdrop-filter: blur(14px);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 40px;
+      display: grid;
+      gap: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -60px -60px auto;
+      width: 220px;
+      height: 220px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(13, 107, 120, 0.18), rgba(243, 180, 90, 0.16));
+    }
+
+    .eyebrow {
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      font-size: clamp(36px, 7vw, 64px);
+      line-height: 0.96;
+      max-width: 10ch;
+    }
+
+    .hero p,
+    .panel p {
+      margin: 0;
+      line-height: 1.7;
+      color: var(--muted);
+      max-width: 50ch;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .feature {
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.55);
+      border: 1px solid rgba(23, 49, 58, 0.1);
+      padding: 16px;
+    }
+
+    .feature strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+
+    .feature span {
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .panel {
+      padding: 28px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
+    .panel-header h2 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+
+    .buttons {
+      display: grid;
+      gap: 12px;
+    }
+
+    .button,
+    .button-link {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 52px;
+      padding: 14px 18px;
+      border-radius: 16px;
+      border: 1px solid transparent;
+      font: inherit;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+
+    .button:hover,
+    .button-link:hover {
+      transform: translateY(-1px);
+    }
+
+    .button-google {
+      color: #fff9f2;
+      background: linear-gradient(135deg, #dc5d41, #c8402c);
+      box-shadow: 0 14px 30px rgba(214, 81, 56, 0.26);
+    }
+
+    .button-discord {
+      color: #f1fbfd;
+      background: linear-gradient(135deg, #0d6b78, #0f4d56);
+      box-shadow: 0 14px 30px rgba(13, 107, 120, 0.24);
+    }
+
+    .button-link {
+      background: transparent;
+      border-color: var(--line);
+      color: var(--ink);
+    }
+
+    .session-note {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.66);
+      border: 1px solid rgba(23, 49, 58, 0.08);
+      display: none;
+      gap: 6px;
+    }
+
+    .session-note strong {
+      font-size: 15px;
+    }
+
+    .muted-link {
+      color: var(--discord);
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero,
+      .panel {
+        padding: 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">Standalone Account Flow</p>
+      <h1>先用 Google 登入，再把 Discord 掛上來。</h1>
+      <p>
+        這個頁面會為目前裝置建立獨立 token。登入完成後，你可以直接進入帳戶頁，查看身份資訊、已登入裝置，或把 Discord 連到同一個帳號。
+      </p>
+      <div class="feature-grid">
+        <article class="feature">
+          <strong>獨立登入</strong>
+          <span>沒有另外帶 redirect 時，流程會回到本站帳戶頁，不依賴外部前端。</span>
+        </article>
+        <article class="feature">
+          <strong>多提供者</strong>
+          <span>先用 Google 進帳，再去帳戶頁連 Discord；如果連結目標已有帳號，會先要求確認。</span>
+        </article>
+        <article class="feature">
+          <strong>裝置分流</strong>
+          <span>每個裝置都有自己的登入 token，之後可在帳戶頁查看目前仍登入中的裝置。</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>選擇登入方式</h2>
+        <p>Google 是主流程；Discord 仍可單獨登入，或在帳戶頁被連結進來。</p>
+      </div>
+
+      <div class="session-note" id="sessionNote"></div>
+
+      <div class="buttons">
+        <a class="button button-google" id="googleLogin" href="#">使用 Google 登入</a>
+        <a class="button button-discord" id="discordLogin" href="#">使用 Discord 登入</a>
+      </div>
+
+      <a class="button-link" href="/account">前往帳戶頁</a>
+      <p>如果你已經登入，帳戶頁可以直接查看目前 linked providers 與 active devices。</p>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEYS = Object.freeze({
+      authSession: "yabus_auth_session",
+      deviceKey: "yabus_device_key",
+    });
+
+    function uuidv4() {
+      return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+        (Number(c) ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (Number(c) / 4)))).toString(16)
+      );
+    }
+
+    function ensureDeviceKey() {
+      const stored = localStorage.getItem(STORAGE_KEYS.deviceKey);
+      if (stored) {
+        return stored;
+      }
+      const generated = uuidv4();
+      localStorage.setItem(STORAGE_KEYS.deviceKey, generated);
+      return generated;
+    }
+
+    function readSession() {
+      const raw = localStorage.getItem(STORAGE_KEYS.authSession);
+      if (!raw) {
+        return null;
+      }
+      try {
+        return JSON.parse(raw);
+      } catch {
+        localStorage.removeItem(STORAGE_KEYS.authSession);
+        return null;
+      }
+    }
+
+    function buildStartUrl(provider) {
+      const search = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams();
+      params.set("platform", search.get("platform") || "web");
+      const redirect = search.get("redirect") || "";
+      if (redirect) {
+        params.set("redirect", redirect);
+      }
+      params.set("device_key", ensureDeviceKey());
+      return `/api/v1/auth/${provider}-start?${params.toString()}`;
+    }
+
+    function renderSessionNote() {
+      const note = document.getElementById("sessionNote");
+      const session = readSession();
+      if (!session || !session.token) {
+        note.style.display = "none";
+        return;
+      }
+      note.style.display = "grid";
+      note.innerHTML = [
+        `<strong>目前已登入 ${session.display_name || "這個帳號"}</strong>`,
+        `<span>上次登入方式：${session.provider || "unknown"}，你也可以直接去 <a class="muted-link" href="/account">帳戶頁</a> 管理連結與裝置。</span>`,
+      ].join("");
+    }
+
+    document.getElementById("googleLogin").href = buildStartUrl("google");
+    document.getElementById("discordLogin").href = buildStartUrl("discord");
+    renderSessionNote();
+  </script>
+</body>
+</html>

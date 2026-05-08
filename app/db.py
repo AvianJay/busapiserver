@@ -206,6 +206,37 @@ CREATE TABLE IF NOT EXISTS auth_oauth_states (
 
 CREATE INDEX IF NOT EXISTS idx_auth_oauth_states_expires_at
     ON auth_oauth_states(expires_at);
+
+CREATE TABLE IF NOT EXISTS auth_link_state_contexts (
+    state_hash        TEXT PRIMARY KEY,
+    target_account_id INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    FOREIGN KEY (state_hash) REFERENCES auth_oauth_states(state_hash) ON DELETE CASCADE,
+    FOREIGN KEY (target_account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_link_state_contexts_expires_at
+    ON auth_link_state_contexts(expires_at);
+
+CREATE TABLE IF NOT EXISTS auth_pending_account_merges (
+    token_hash        TEXT PRIMARY KEY,
+    target_account_id INTEGER NOT NULL,
+    source_account_id INTEGER NOT NULL,
+    provider          TEXT NOT NULL
+                      CHECK (provider IN ('discord', 'google')),
+    provider_user_id  TEXT NOT NULL,
+    created_at        INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    consumed_at       INTEGER,
+    FOREIGN KEY (target_account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_pending_account_merges_target
+    ON auth_pending_account_merges(target_account_id);
+CREATE INDEX IF NOT EXISTS idx_auth_pending_account_merges_expires_at
+    ON auth_pending_account_merges(expires_at);
 """
 
 DOWNLOAD_SCHEMA_SQL = """

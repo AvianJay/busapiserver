@@ -6,18 +6,25 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.auth_service import (
+    AuthPrincipal,
     AuthError,
     OAuthIdentity,
     _allowed_google_id_token_audiences,
     _upsert_login,
+    account_devices_payload,
+    account_payload,
     authenticate_token,
     build_login_redirect_url,
+    confirm_account_merge,
     complete_google_native_login,
+    get_pending_account_merge,
+    link_oauth_identity,
     normalize_redirect_uri,
+    revoke_all_tokens,
     revoke_token,
 )
 from app.config import Settings
-from app.db import init_db
+from app.db import get_connection, init_db
 
 
 def _settings(db_path: Path) -> Settings:
@@ -145,6 +152,190 @@ class AuthServiceTests(unittest.TestCase):
         self.assertEqual(result.provider, "google")
         self.assertEqual(result.display_name, "Google User")
         self.assertIsNotNone(authenticate_token(self.settings, result.token))
+
+    def test_linking_new_provider_attaches_to_current_account(self) -> None:
+        google_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        link_result = link_oauth_identity(
+            self.settings,
+            target_account_id=google_login.account_id,
+            identity=OAuthIdentity(
+                provider="discord",
+                provider_user_id="discord-user",
+                email="discord@example.test",
+                display_name="Discord User",
+                avatar_url=None,
+            ),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        self.assertEqual(link_result.status, "linked")
+        self.assertIsNone(link_result.merge_token)
+
+        principal = authenticate_token(self.settings, google_login.token)
+        self.assertIsNotNone(principal)
+        assert principal is not None
+        payload = account_payload(self.settings, principal)
+        self.assertEqual({row["provider"] for row in payload["identities"]}, {"google", "discord"})
+
+    def test_linking_existing_provider_requires_confirmation_and_deletes_source_account(self) -> None:
+        target_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+        source_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="discord",
+                provider_user_id="discord-user",
+                email="discord@example.test",
+                display_name="Discord User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        pending = link_oauth_identity(
+            self.settings,
+            target_account_id=target_login.account_id,
+            identity=OAuthIdentity(
+                provider="discord",
+                provider_user_id="discord-user",
+                email="discord@example.test",
+                display_name="Discord User",
+                avatar_url=None,
+            ),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        self.assertEqual(pending.status, "merge_required")
+        self.assertIsNotNone(pending.merge_token)
+        assert pending.merge_token is not None
+
+        preview = get_pending_account_merge(
+            self.settings,
+            target_account_id=target_login.account_id,
+            merge_token=pending.merge_token,
+        )
+        self.assertEqual(preview.source_account_id, source_login.account_id)
+        self.assertEqual(preview.active_device_count, 1)
+        self.assertEqual([identity.provider for identity in preview.source_identities], ["discord"])
+
+        merged = confirm_account_merge(
+            self.settings,
+            target_account_id=target_login.account_id,
+            merge_token=pending.merge_token,
+        )
+        self.assertEqual(merged.status, "linked")
+
+        target_principal = authenticate_token(self.settings, target_login.token)
+        self.assertIsNotNone(target_principal)
+        assert target_principal is not None
+        payload = account_payload(self.settings, target_principal)
+        self.assertEqual({row["provider"] for row in payload["identities"]}, {"google", "discord"})
+
+        with get_connection(self.db_path) as connection:
+            deleted_account = connection.execute(
+                "SELECT 1 FROM accounts WHERE id = ?",
+                (source_login.account_id,),
+            ).fetchone()
+        self.assertIsNone(deleted_account)
+        self.assertIsNone(authenticate_token(self.settings, source_login.token))
+
+    def test_account_devices_payload_lists_active_devices(self) -> None:
+        first_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+        second_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        devices = account_devices_payload(
+            self.settings,
+            AuthPrincipal(
+                account_id=second_login.account_id,
+                device_id=second_login.device_id,
+                token_id=0,
+                role="user",
+            ),
+        )
+
+        self.assertEqual(len(devices["devices"]), 2)
+        self.assertEqual(devices["devices"][0]["device_id"], str(second_login.device_id))
+        self.assertTrue(devices["devices"][0]["is_current"])
+
+    def test_revoke_all_tokens_logs_out_every_device(self) -> None:
+        first_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+        second_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        principal = authenticate_token(self.settings, second_login.token)
+        self.assertIsNotNone(principal)
+        assert principal is not None
+
+        revoke_all_tokens(self.settings, principal)
+
+        self.assertIsNone(authenticate_token(self.settings, first_login.token))
+        self.assertIsNone(authenticate_token(self.settings, second_login.token))
 
 
 if __name__ == "__main__":

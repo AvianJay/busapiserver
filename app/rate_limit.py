@@ -13,6 +13,7 @@ from app.config import get_settings
 
 RATE_LIMIT_REQUESTS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60
+AUTH_TOKEN_COOKIE_NAME = "yabus_auth_token"
 
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
@@ -45,9 +46,13 @@ def _normalize_bucket(route_template: str) -> str:
 def _extract_bearer_token(request: Request) -> str | None:
     authorization = (request.headers.get("authorization") or "").strip()
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        return None
-    return token.strip()
+    if scheme.lower() == "bearer" and token.strip():
+        return token.strip()
+
+    cookie_token = (request.cookies.get(AUTH_TOKEN_COOKIE_NAME) or "").strip()
+    if cookie_token:
+        return cookie_token
+    return None
 
 
 def _authenticate_request(request: Request) -> AuthPrincipal | None:
