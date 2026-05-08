@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 import hashlib
+import re
 import secrets
 import threading
 import time
@@ -202,6 +203,114 @@ def validate_device_key(value: str) -> str:
     if parsed.version != 4:
         raise AuthError("Device key must be a UUIDv4 value.")
     return str(parsed)
+
+
+_DEVICE_NAME_APP_UA_PATTERN = re.compile(
+    r"^YABus/[^\s()]+ \((?P<platform>[^)]+)\)\s*$"
+)
+_DEVICE_NAME_BROWSER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("Edge", re.compile(r"Edg(?:A|iOS)?/(?P<ver>\d+)")),
+    ("Opera", re.compile(r"OPR/(?P<ver>\d+)")),
+    ("Chrome", re.compile(r"Chrome/(?P<ver>\d+)")),
+    ("Firefox", re.compile(r"Firefox/(?P<ver>\d+)")),
+    ("Safari", re.compile(r"Version/(?P<ver>[\d.]+).+Safari/")),
+)
+_DEVICE_NAME_ANDROID_VER = re.compile(r"Android (?P<ver>\d+)")
+_DEVICE_NAME_IOS_VER = re.compile(
+    r"(?:iPhone|iPad|iPod)(?: OS|; CPU(?: iPhone)? OS) (?P<ver>\d+)", re.IGNORECASE,
+)
+_DEVICE_NAME_WINDOWS_NT = re.compile(r"Windows NT (?P<ver>[\d.]+)")
+_DEVICE_NAME_MACOS_VER = re.compile(r"Mac OS X (?P<ver>[\d_]+)")
+
+_WINDOWS_NT_DISPLAY: dict[str, str] = {
+    "10.0": "10/11",
+    "6.3": "8.1",
+    "6.2": "8",
+    "6.1": "7",
+}
+
+
+def generate_device_name_from_user_agent(user_agent: str | None) -> str | None:
+    """Derive a short, human-readable device name from a User-Agent header.
+
+    Examples:
+        Browser:  "Chrome Windows 137", "Safari macOS", "Firefox Android 138"
+        App UA:   "Android (App)", "iPhone (App)", "iPad (App)"
+    """
+    normalized = (user_agent or "").strip()
+    if not normalized:
+        return None
+
+    # YABus app user-agent: "YABus/1.0.0-abc1234 (android)"
+    app_match = _DEVICE_NAME_APP_UA_PATTERN.match(normalized)
+    if app_match:
+        platform = app_match.group("platform").strip().lower()
+        _APP_PLATFORM_NAMES = {
+            "android": "Android",
+            "ios": "iPhone",
+            "macos": "macOS",
+            "windows": "Windows",
+            "linux": "Linux",
+            "web": "Web",
+        }
+        display = _APP_PLATFORM_NAMES.get(platform, platform.title())
+        return f"{display} (App)"
+
+    # Browser user-agent
+    browser_name = None
+    browser_ver = None
+    for name, pattern in _DEVICE_NAME_BROWSER_PATTERNS:
+        match = pattern.search(normalized)
+        if match:
+            browser_name = name
+            browser_ver = match.group("ver")
+            break
+
+    if not browser_name:
+        return None
+
+    # Detect OS
+    os_name = None
+    android_match = _DEVICE_NAME_ANDROID_VER.search(normalized)
+    if android_match:
+        os_name = f"Android {android_match.group('ver')}"
+    elif "android" in normalized.lower():
+        os_name = "Android"
+    else:
+        ios_match = _DEVICE_NAME_IOS_VER.search(normalized)
+        if ios_match:
+            if "ipad" in normalized.lower():
+                os_name = f"iPadOS {ios_match.group('ver')}"
+            else:
+                os_name = f"iOS {ios_match.group('ver')}"
+        elif "ipad" in normalized.lower():
+            os_name = "iPadOS"
+        elif any(token in normalized.lower() for token in ("iphone", "ios")):
+            os_name = "iOS"
+        else:
+            win_match = _DEVICE_NAME_WINDOWS_NT.search(normalized)
+            if win_match:
+                nt_ver = win_match.group("ver")
+                os_name = f"Windows {_WINDOWS_NT_DISPLAY.get(nt_ver, nt_ver)}"
+            elif "windows" in normalized.lower():
+                os_name = "Windows"
+            else:
+                mac_match = _DEVICE_NAME_MACOS_VER.search(normalized)
+                if mac_match:
+                    os_name = "macOS"
+                elif "mac os" in normalized.lower() or "macos" in normalized.lower():
+                    os_name = "macOS"
+                elif "cros" in normalized.lower() or "chrome os" in normalized.lower():
+                    os_name = "ChromeOS"
+                elif "linux" in normalized.lower():
+                    os_name = "Linux"
+
+    parts = [browser_name]
+    if os_name:
+        parts.append(os_name)
+    if browser_ver:
+        parts.append(browser_ver)
+    return " ".join(parts)
 
 
 def callback_url(settings: Settings, provider: AuthProvider) -> str:
@@ -419,6 +528,7 @@ def complete_oauth_flow(
     provider: AuthProvider,
     code: str,
     state: str,
+    user_agent: str | None = None,
 ) -> AuthFlowResult:
     oauth_state = consume_oauth_state(settings, provider=provider, state=state)
     target_account_id = _consume_link_oauth_state_context(settings, state=state)
@@ -433,11 +543,13 @@ def complete_oauth_flow(
         exc.redirect_uri = oauth_state.redirect_uri
         raise
     if target_account_id is None:
+        device_name = generate_device_name_from_user_agent(user_agent)
         login_result = _upsert_login(
             settings,
             identity=identity,
             device_key=oauth_state.device_key,
             redirect_uri=oauth_state.redirect_uri,
+            device_name=device_name,
         )
         return AuthFlowResult(
             kind="login",
@@ -463,6 +575,7 @@ def complete_google_native_login(
     *,
     id_token: str,
     device_key: str,
+    device_name: str | None = None,
 ) -> AuthLoginResult:
     normalized_device_key = validate_device_key(device_key)
     identity = _google_identity_from_id_token(settings, id_token=id_token)
@@ -471,6 +584,7 @@ def complete_google_native_login(
         identity=identity,
         device_key=normalized_device_key,
         redirect_uri=DEFAULT_APP_REDIRECT_URI,
+        device_name=device_name,
     )
 
 
@@ -648,8 +762,10 @@ def _upsert_login(
     identity: OAuthIdentity,
     device_key: str,
     redirect_uri: str,
+    device_name: str | None = None,
 ) -> AuthLoginResult:
     now = int(time.time())
+    safe_device_name = (device_name or "").strip()[:200] or None
     with get_connection(settings.db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -695,20 +811,20 @@ def _upsert_login(
                 device_id = generate_snowflake(settings)
                 connection.execute(
                     """
-                    INSERT INTO account_devices (id, account_id, device_key, created_at, last_seen_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO account_devices (id, account_id, device_key, device_name, created_at, last_seen_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (device_id, account_id, device_key, now, now),
+                    (device_id, account_id, device_key, safe_device_name, now, now),
                 )
             else:
                 device_id = int(device_row["id"])
                 connection.execute(
                     """
                     UPDATE account_devices
-                    SET account_id = ?, last_seen_at = ?
+                    SET account_id = ?, device_name = COALESCE(?, device_name), last_seen_at = ?
                     WHERE id = ?
                     """,
-                    (account_id, now, device_id),
+                    (account_id, safe_device_name, now, device_id),
                 )
 
             connection.execute(
@@ -1118,7 +1234,7 @@ def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, A
         ).fetchall()
         device_row = connection.execute(
             """
-            SELECT device_key, created_at, last_seen_at
+            SELECT device_key, device_name, created_at, last_seen_at
             FROM account_devices
             WHERE id = ?
             """,
@@ -1132,6 +1248,7 @@ def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, A
         "updated_at": int(account_row["updated_at"]) if account_row else None,
         "device": {
             "device_key": device_row["device_key"] if device_row else None,
+            "device_name": device_row["device_name"] if device_row else None,
             "created_at": int(device_row["created_at"]) if device_row else None,
             "last_seen_at": int(device_row["last_seen_at"]) if device_row else None,
         },
@@ -1155,6 +1272,7 @@ def account_devices_payload(settings: Settings, principal: AuthPrincipal) -> dic
             SELECT
                 d.id,
                 d.device_key,
+                d.device_name,
                 d.created_at,
                 d.last_seen_at,
                 t.created_at AS token_created_at,
@@ -1178,6 +1296,7 @@ def account_devices_payload(settings: Settings, principal: AuthPrincipal) -> dic
             {
                 "device_id": str(row["id"]),
                 "device_key": row["device_key"],
+                "device_name": row["device_name"],
                 "created_at": int(row["created_at"]),
                 "last_seen_at": int(row["last_seen_at"]),
                 "token_created_at": int(row["token_created_at"]),

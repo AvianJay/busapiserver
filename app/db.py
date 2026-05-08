@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS account_devices (
     id           INTEGER PRIMARY KEY,
     account_id   INTEGER NOT NULL,
     device_key   TEXT NOT NULL UNIQUE,
+    device_name  TEXT,
     created_at   INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
@@ -310,7 +311,17 @@ def init_db(db_path: str | Path) -> None:
     with get_connection(db_path) as connection:
         _drop_legacy_inter_tables(connection)
         connection.executescript(MAIN_SCHEMA_SQL)
+        _migrate_account_devices_add_device_name(connection)
         connection.commit()
+
+
+def _migrate_account_devices_add_device_name(connection: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(account_devices)").fetchall()
+    }
+    if "device_name" not in columns:
+        connection.execute("ALTER TABLE account_devices ADD COLUMN device_name TEXT")
 
 
 def _drop_legacy_inter_tables(connection: sqlite3.Connection) -> None:

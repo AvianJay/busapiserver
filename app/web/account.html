@@ -541,6 +541,7 @@
     <section class="hero">
       <div class="hero-aside">
         <div class="badge" id="heroBadge">尚未登入</div>
+        <button class="button button-ghost" type="button" id="logoutButton">登出</button>
       </div>
     </section>
 
@@ -556,7 +557,6 @@
           <button class="button button-primary" type="button" id="refreshButton">重新整理</button>
           <button class="button button-google" type="button" id="linkGoogleButton">連結 Google</button>
           <button class="button button-discord" type="button" id="linkDiscordButton">連結 Discord</button>
-          <button class="button button-ghost" type="button" id="logoutButton">登出這台裝置</button>
           <button class="button button-danger" type="button" id="logoutAllButton">登出所有裝置</button>
         </div>
       </section>
@@ -944,8 +944,8 @@
         panel.className = "panel notice notice-warning";
         panel.innerHTML = [
           `<h2>這個 ${escapeHtml(providerLabel(state.mergePreview.provider))} 已經掛在別的帳號上</h2>`,
-          `<p>確認後，來源帳號 <span class="mono">${escapeHtml(state.mergePreview.source_account_id)}</span> 會被刪除。這個動作會保留你現在的帳號，並把本次要連結的 provider 移過來。</p>`,
-          `<p>來源帳號目前還有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份、${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台仍登入中的裝置。相關身份：${escapeHtml(identities || "-")}。</p>`,
+          `<p>確認後，來源帳號 <span class="mono">${escapeHtml(state.mergePreview.source_account_id)}</span> 會被刪除。</p>`,
+          `<p>來源帳號目前還有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份、${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台仍登入中的裝置。</p>`,
           `<div class="notice-actions"><button class="button button-danger" type="button" id="confirmMergeButton">確認連結並刪除來源帳號</button><button class="button button-ghost" type="button" id="cancelMergeButton">取消</button></div>`,
         ].join("");
         document.getElementById("confirmMergeButton").addEventListener("click", confirmMerge);
@@ -993,7 +993,7 @@
       const root = document.getElementById("identityList");
       const identities = state.account && Array.isArray(state.account.identities) ? state.account.identities : [];
       if (!identities.length) {
-        root.innerHTML = '<div class="empty">還沒有任何 linked provider。</div>';
+        root.innerHTML = '<div class="empty">空空如也</div>';
         return;
       }
       root.innerHTML = identities.map((identity) => `
@@ -1015,11 +1015,11 @@
         return;
       }
       const device = state.account.device;
+      const deviceLabel = device.device_name ? `${escapeHtml(device.device_name)}（這台裝置）` : "這台裝置";
       root.innerHTML = `
         <article class="device">
           <div class="device-head">
-            <h3>這台裝置</h3>
-            <span class="pill">目前 token</span>
+            <h3>${deviceLabel}</h3>
           </div>
           <p class="mono">${escapeHtml(maskDeviceKey(device.device_key))}</p>
           <p>建立：${escapeHtml(formatTime(device.created_at))}</p>
@@ -1031,19 +1031,19 @@
     function renderDevices() {
       const root = document.getElementById("deviceList");
       if (!state.devices.length) {
-        root.innerHTML = '<div class="empty">目前沒有其他 active device sessions。</div>';
+        root.innerHTML = '<div class="empty">空空如也</div>';
         return;
       }
       root.innerHTML = state.devices.map((device) => `
         <article class="device">
           <div class="device-head">
-            <h3>${device.is_current ? "目前裝置" : "其他裝置"}</h3>
-            <span class="pill">${device.is_current ? "Current" : "Active"}</span>
+            <h3>${escapeHtml(device.device_name || "未知裝置")}</h3>
+            ${device.is_current ? "<span class='pill'>目前裝置</span>" : ""}
           </div>
           <p class="mono">${escapeHtml(maskDeviceKey(device.device_key))}</p>
           <p>裝置 ID：${escapeHtml(device.device_id)}</p>
-          <p>Token 建立：${escapeHtml(formatTime(device.token_created_at))}</p>
-          <p>最近使用：${escapeHtml(formatTime(device.token_last_used_at || device.last_seen_at))}</p>
+          <p>登入時間：${escapeHtml(formatTime(device.token_created_at))}</p>
+          <p>最近活動：${escapeHtml(formatTime(device.token_last_used_at || device.last_seen_at))}</p>
         </article>
       `).join("");
     }

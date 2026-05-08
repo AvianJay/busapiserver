@@ -43,6 +43,7 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 class GoogleNativeLoginRequest(BaseModel):
     id_token: str = Field(min_length=1)
     device_key: str = Field(min_length=1)
+    device_name: str = Field(default="")
 
 
 class OAuthLinkStartRequest(BaseModel):
@@ -110,7 +111,10 @@ def discord_callback(
     state: str = Query(default=""),
     error: str = Query(default=""),
 ) -> RedirectResponse:
-    return _oauth_callback(request, provider="discord", code=code, state=state, error=error)
+    return _oauth_callback(
+        request, provider="discord", code=code, state=state, error=error,
+        user_agent=request.headers.get("user-agent"),
+    )
 
 
 @router.get("/api/v1/auth/google-callback")
@@ -120,7 +124,10 @@ def google_callback(
     state: str = Query(default=""),
     error: str = Query(default=""),
 ) -> RedirectResponse:
-    return _oauth_callback(request, provider="google", code=code, state=state, error=error)
+    return _oauth_callback(
+        request, provider="google", code=code, state=state, error=error,
+        user_agent=request.headers.get("user-agent"),
+    )
 
 
 @router.post("/api/v1/auth/google-native")
@@ -130,6 +137,7 @@ def google_native_login(request: Request, payload: GoogleNativeLoginRequest) -> 
             request.app.state.settings,
             id_token=payload.id_token,
             device_key=payload.device_key,
+            device_name=payload.device_name.strip() or None,
         )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -318,6 +326,7 @@ def _oauth_callback(
     code: str,
     state: str,
     error: str,
+    user_agent: str | None = None,
 ) -> RedirectResponse:
     auth_provider = validate_provider(provider)
     fallback_redirect = default_redirect_uri("web")
@@ -349,6 +358,7 @@ def _oauth_callback(
             provider=auth_provider,
             code=code,
             state=state,
+            user_agent=user_agent,
         )
     except AuthError as exc:
         return RedirectResponse(
