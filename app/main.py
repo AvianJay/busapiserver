@@ -11,6 +11,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
+from app.api.legal import router as legal_router
 from app.api.routes import router
 from app.api.metro import router as metro_router
 from app.api.rail import router as rail_router
@@ -206,6 +207,7 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 app.include_router(auth_router)
 app.include_router(analytics_router)
+app.include_router(legal_router)
 app.include_router(router)
 app.include_router(metro_router)
 app.include_router(rail_router)

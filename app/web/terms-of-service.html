@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YABus 服務條款</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0b0f1a;
+            --surface: rgba(255, 255, 255, 0.04);
+            --surface-hover: rgba(255, 255, 255, 0.07);
+            --ink: #f0f2f5;
+            --ink-secondary: #94a3b8;
+            --muted: #64748b;
+            --line: rgba(255, 255, 255, 0.08);
+            --line-strong: rgba(255, 255, 255, 0.16);
+            --accent: #6ee7b7;
+            --accent-soft: rgba(110, 231, 183, 0.14);
+            --danger: #fb7185;
+            --radius: 24px;
+            --radius-sm: 16px;
+            --radius-xs: 12px;
+            --shadow: 0 30px 80px rgba(0, 0, 0, 0.32);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            color-scheme: dark;
+        }
+
+        body {
+            min-height: 100vh;
+            color: var(--ink);
+            background: var(--bg-primary);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            padding: 24px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 50% at 20% -10%, rgba(110, 231, 183, 0.12), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 10%, rgba(88, 101, 242, 0.1), transparent),
+                radial-gradient(ellipse 50% 60% at 50% 100%, rgba(244, 114, 182, 0.08), transparent);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        main {
+            position: relative;
+            z-index: 1;
+            width: min(1180px, 100%);
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+            gap: 24px;
+            align-items: start;
+            animation: fadeInUp 0.5s ease both;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(16px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .hero,
+        .viewer {
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: var(--shadow);
+        }
+
+        .hero {
+            padding: 28px;
+            display: grid;
+            gap: 20px;
+            position: sticky;
+            top: 24px;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: "";
+            position: absolute;
+            width: 280px;
+            height: 280px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(110, 231, 183, 0.08), transparent 70%);
+            right: -80px;
+            bottom: -120px;
+            pointer-events: none;
+        }
+
+        .eyebrow,
+        .viewer-label {
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .hero h1 {
+            font-size: clamp(30px, 4vw, 48px);
+            line-height: 1.05;
+            letter-spacing: -0.03em;
+            font-weight: 800;
+            background: linear-gradient(135deg, #f8fafc 0%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero p,
+        .viewer-subtitle,
+        .meta-card span,
+        .viewer-note {
+            color: var(--ink-secondary);
+        }
+
+        .pill-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 40px;
+            padding: 0 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--ink-secondary);
+            font-weight: 600;
+            text-decoration: none;
+            transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+        }
+
+        .pill:hover,
+        .pill.active {
+            border-color: rgba(110, 231, 183, 0.35);
+            background: var(--accent-soft);
+            color: var(--ink);
+        }
+
+        .meta-grid {
+            display: grid;
+            gap: 12px;
+        }
+
+        .meta-card {
+            padding: 16px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--line);
+            background: var(--surface-hover);
+            display: grid;
+            gap: 6px;
+        }
+
+        .meta-card strong {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .viewer {
+            padding: 28px;
+            display: grid;
+            gap: 18px;
+            min-height: calc(100vh - 48px);
+        }
+
+        .viewer-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .viewer-header h2 {
+            font-size: clamp(24px, 3vw, 34px);
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+            margin-top: 8px;
+        }
+
+        .viewer-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .status-pill,
+        .action-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 38px;
+            padding: 0 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .status-pill {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--ink-secondary);
+        }
+
+        .status-pill.is-ready {
+            border-color: rgba(110, 231, 183, 0.35);
+            color: var(--accent);
+            background: rgba(110, 231, 183, 0.08);
+        }
+
+        .status-pill.is-error {
+            border-color: rgba(251, 113, 133, 0.34);
+            color: #fecdd3;
+            background: rgba(251, 113, 133, 0.1);
+        }
+
+        .action-link {
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .action-link:hover {
+            border-color: var(--line-strong);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .error-box {
+            padding: 14px 16px;
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(251, 113, 133, 0.28);
+            background: rgba(127, 29, 29, 0.25);
+            color: #fecdd3;
+        }
+
+        .document-body {
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--line);
+            background: rgba(8, 12, 20, 0.72);
+            padding: 28px;
+            overflow: auto;
+        }
+
+        .document-body.is-loading {
+            color: var(--ink-secondary);
+        }
+
+        .document-body h1,
+        .document-body h2,
+        .document-body h3 {
+            color: var(--ink);
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+            margin: 1.6em 0 0.6em;
+        }
+
+        .document-body h1:first-child,
+        .document-body h2:first-child,
+        .document-body h3:first-child {
+            margin-top: 0;
+        }
+
+        .document-body h1 {
+            font-size: clamp(28px, 4vw, 40px);
+        }
+
+        .document-body h2 {
+            font-size: clamp(22px, 3vw, 28px);
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .document-body p,
+        .document-body li,
+        .document-body blockquote {
+            color: var(--ink-secondary);
+            line-height: 1.8;
+        }
+
+        .document-body ul,
+        .document-body ol {
+            margin: 0 0 1.2em;
+            padding-left: 1.5em;
+        }
+
+        .document-body li+li {
+            margin-top: 0.4em;
+        }
+
+        .document-body a {
+            color: #93c5fd;
+        }
+
+        .document-body em {
+            color: var(--muted);
+        }
+
+        .document-body code {
+            font-family: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+            font-size: 0.95em;
+            padding: 0.15em 0.4em;
+            border-radius: 8px;
+            background: rgba(148, 163, 184, 0.12);
+            color: #e2e8f0;
+        }
+
+        .document-body pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.7;
+            color: #e2e8f0;
+        }
+
+        .document-body hr {
+            border: 0;
+            border-top: 1px solid var(--line);
+            margin: 1.5em 0;
+        }
+
+        @media (max-width: 960px) {
+            body {
+                padding: 16px;
+            }
+
+            main {
+                grid-template-columns: 1fr;
+            }
+
+            .hero {
+                position: static;
+            }
+
+            .viewer {
+                min-height: auto;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .hero,
+            .viewer,
+            .document-body {
+                padding: 20px;
+            }
+
+            .viewer-header {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main>
+
+        <section class="viewer">
+            <div id="errorBox" class="error-box" hidden></div>
+            <article id="documentBody" class="document-body is-loading" aria-live="polite">正在載入...</article>
+        </section>
+    </main>
+
+    <script>
+        const DOCUMENT_CONFIG = Object.freeze({
+            endpoint: "/api/v1/terms-of-service",
+            rawHref: "/api/v1/terms-of-service",
+        });
+
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            }[char]));
+        }
+
+        function renderMarkdown(content) {
+            if (window.marked && typeof window.marked.parse === "function") {
+                return window.marked.parse(content);
+            }
+            return `<pre>${escapeHtml(content)}</pre>`;
+        }
+
+        async function loadDocument() {
+            const body = document.getElementById("documentBody");
+            const errorBox = document.getElementById("errorBox");
+
+            try {
+                const response = await fetch(DOCUMENT_CONFIG.endpoint, {
+                    cache: "no-store",
+                    headers: { "Accept": "application/json" },
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload && payload.detail ? payload.detail : `HTTP ${response.status}`);
+                }
+                if (!payload || typeof payload.content !== "string") {
+                    throw new Error("API did not return a valid markdown payload.");
+                }
+
+                body.classList.remove("is-loading");
+                body.innerHTML = renderMarkdown(payload.content);
+                errorBox.hidden = true;
+            } catch (error) {
+                const message = error && error.message ? error.message : String(error);
+                body.classList.remove("is-loading");
+                body.innerHTML = `<pre>${escapeHtml(message)}</pre>`;
+                errorBox.textContent = `無法載入服務條款：${message}`;
+                errorBox.hidden = false;
+            }
+        }
+
+        window.addEventListener("DOMContentLoaded", loadDocument);
+    </script>
+</body>
+
+</html>
