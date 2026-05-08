@@ -8,9 +8,11 @@ from uuid import uuid4
 from app.auth_service import (
     AuthError,
     OAuthIdentity,
+    _allowed_google_id_token_audiences,
     _upsert_login,
     authenticate_token,
     build_login_redirect_url,
+    complete_google_native_login,
     normalize_redirect_uri,
     revoke_token,
 )
@@ -43,6 +45,7 @@ def _settings(db_path: Path) -> Settings:
         discord_oauth_client_secret="discord-secret",
         google_oauth_client_id="google-client",
         google_oauth_client_secret="google-secret",
+        google_native_oauth_client_ids=("android-client", "ios-client"),
     )
 
 
@@ -105,6 +108,43 @@ class AuthServiceTests(unittest.TestCase):
 
         revoke_token(self.settings, principal)
         self.assertIsNone(authenticate_token(self.settings, result.token))
+
+    def test_google_native_login_accepts_configured_audiences(self) -> None:
+        self.assertEqual(
+            _allowed_google_id_token_audiences(self.settings),
+            {"google-client", "android-client", "ios-client"},
+        )
+
+    def test_google_native_login_issues_yabus_token(self) -> None:
+        device_key = str(uuid4())
+
+        def fake_google_identity(settings: Settings, *, id_token: str) -> OAuthIdentity:
+            self.assertEqual(settings, self.settings)
+            self.assertEqual(id_token, "google-id-token")
+            return OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user",
+                email="google@example.test",
+                display_name="Google User",
+                avatar_url=None,
+            )
+
+        import app.auth_service as auth_service
+
+        original = auth_service._google_identity_from_id_token
+        auth_service._google_identity_from_id_token = fake_google_identity
+        try:
+            result = complete_google_native_login(
+                self.settings,
+                id_token="google-id-token",
+                device_key=device_key,
+            )
+        finally:
+            auth_service._google_identity_from_id_token = original
+
+        self.assertEqual(result.provider, "google")
+        self.assertEqual(result.display_name, "Google User")
+        self.assertIsNotNone(authenticate_token(self.settings, result.token))
 
 
 if __name__ == "__main__":

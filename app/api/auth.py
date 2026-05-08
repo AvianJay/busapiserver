@@ -4,14 +4,17 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
 from app.auth_service import (
     AuthError,
+    AuthLoginResult,
     AuthPlatform,
     account_payload,
     build_authorization_url,
     build_error_redirect_url,
     build_login_redirect_url,
+    complete_google_native_login,
     complete_oauth_login,
     create_oauth_state,
     consume_oauth_state,
@@ -26,6 +29,11 @@ from app.rate_limit import enforce_rate_limit, get_request_principal
 
 
 router = APIRouter(tags=["auth"], dependencies=[Depends(enforce_rate_limit)])
+
+
+class GoogleNativeLoginRequest(BaseModel):
+    id_token: str = Field(min_length=1)
+    device_key: str = Field(min_length=1)
 
 
 @router.get("/auth", response_class=HTMLResponse, include_in_schema=False)
@@ -100,6 +108,19 @@ def google_callback(
     error: str = Query(default=""),
 ) -> RedirectResponse:
     return _oauth_callback(request, provider="google", code=code, state=state, error=error)
+
+
+@router.post("/api/v1/auth/google-native")
+def google_native_login(request: Request, payload: GoogleNativeLoginRequest) -> dict[str, str]:
+    try:
+        result = complete_google_native_login(
+            request.app.state.settings,
+            id_token=payload.id_token,
+            device_key=payload.device_key,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return _login_result_payload(result)
 
 
 @router.get("/api/v1/auth/me")
@@ -197,6 +218,17 @@ def _oauth_callback(
         )
 
     return RedirectResponse(build_login_redirect_url(result.redirect_uri, result), status_code=302)
+
+
+def _login_result_payload(result: AuthLoginResult) -> dict[str, str]:
+    return {
+        "token": result.token,
+        "account_id": str(result.account_id),
+        "device_id": str(result.device_id),
+        "role": result.role,
+        "provider": result.provider,
+        "display_name": result.display_name or "",
+    }
 
 
 def _auth_page_html(

@@ -27,6 +27,7 @@ DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token"
 DISCORD_ME_URL = "https://discord.com/api/users/@me"
 GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 GOOGLE_ME_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 AUTH_REQUEST_TIMEOUT_SECONDS = 10
 SNOWFLAKE_EPOCH_MS = 1_704_067_200_000  # 2024-01-01T00:00:00Z
@@ -325,6 +326,22 @@ def complete_oauth_login(
     )
 
 
+def complete_google_native_login(
+    settings: Settings,
+    *,
+    id_token: str,
+    device_key: str,
+) -> AuthLoginResult:
+    normalized_device_key = validate_device_key(device_key)
+    identity = _google_identity_from_id_token(settings, id_token=id_token)
+    return _upsert_login(
+        settings,
+        identity=identity,
+        device_key=normalized_device_key,
+        redirect_uri=DEFAULT_APP_REDIRECT_URI,
+    )
+
+
 def _exchange_code_for_identity(
     settings: Settings,
     *,
@@ -439,6 +456,57 @@ def _exchange_google_code(
         email=profile.get("email"),
         display_name=profile.get("name"),
         avatar_url=profile.get("picture"),
+    )
+
+
+def _allowed_google_id_token_audiences(settings: Settings) -> set[str]:
+    audiences = set(settings.google_native_oauth_client_ids)
+    if settings.google_oauth_client_id:
+        audiences.add(settings.google_oauth_client_id)
+    return {audience.strip() for audience in audiences if audience.strip()}
+
+
+def _google_identity_from_id_token(settings: Settings, *, id_token: str) -> OAuthIdentity:
+    cleaned_id_token = id_token.strip()
+    if not cleaned_id_token:
+        raise AuthError("Missing Google ID token.")
+
+    allowed_audiences = _allowed_google_id_token_audiences(settings)
+    if not allowed_audiences:
+        raise AuthError("Google native OAuth client ids are not configured.", status_code=500)
+
+    tokeninfo_response = requests.get(
+        GOOGLE_TOKENINFO_URL,
+        params={"id_token": cleaned_id_token},
+        headers={"Accept": "application/json"},
+        timeout=AUTH_REQUEST_TIMEOUT_SECONDS,
+    )
+    if tokeninfo_response.status_code != 200:
+        raise AuthError("Google ID token verification failed.", status_code=401)
+
+    claims = tokeninfo_response.json()
+    issuer = str(claims.get("iss") or "").strip()
+    if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise AuthError("Google ID token issuer was invalid.", status_code=401)
+
+    audience = str(claims.get("aud") or "").strip()
+    if audience not in allowed_audiences:
+        raise AuthError("Google ID token audience was invalid.", status_code=401)
+
+    user_id = str(claims.get("sub") or "").strip()
+    if not user_id:
+        raise AuthError("Google ID token subject was missing.", status_code=401)
+
+    email_verified = claims.get("email_verified")
+    if str(email_verified).lower() == "false":
+        raise AuthError("Google account email is not verified.", status_code=401)
+
+    return OAuthIdentity(
+        provider="google",
+        provider_user_id=user_id,
+        email=claims.get("email"),
+        display_name=claims.get("name"),
+        avatar_url=claims.get("picture"),
     )
 
 

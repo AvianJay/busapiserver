@@ -132,6 +132,7 @@ class Settings:
     discord_oauth_client_secret: str | None
     google_oauth_client_id: str | None
     google_oauth_client_secret: str | None
+    google_native_oauth_client_ids: tuple[str, ...]
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -171,6 +172,10 @@ class Settings:
             discord_oauth_client_secret=os.getenv("DISCORD_OAUTH_CLIENT_SECRET"),
             google_oauth_client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
             google_oauth_client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
+            google_native_oauth_client_ids=_split_csv(
+                os.getenv("GOOGLE_NATIVE_OAUTH_CLIENT_IDS"),
+                (),
+            ),
         )
 
     def require_tdx_credentials(self) -> None:
