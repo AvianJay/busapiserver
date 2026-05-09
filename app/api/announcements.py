@@ -16,7 +16,7 @@ from app.request_analytics import parse_user_agent
 
 router = APIRouter(tags=["announcements"], dependencies=[Depends(enforce_rate_limit)])
 
-_ALLOWED_BEHAVIORS = {"once", "forever"}
+_ALLOWED_BEHAVIORS = {"none", "once", "forever"}
 _ALLOWED_PLATFORMS = {"android", "ios", "windows", "macos", "linux", "web"}
 _ALLOWED_EDITOR_ROLES = {"mod", "admin"}
 _VERSION_PART_PATTERN = re.compile(r"^(>=|<=|>|<|==|=)?\s*(\d+(?:\.\d+)*)$")
@@ -33,7 +33,7 @@ class AnnouncementBehaviorPayload(BaseModel):
     def _validate_behavior(cls, value: str) -> str:
         normalized = value.strip().lower()
         if normalized not in _ALLOWED_BEHAVIORS:
-            raise ValueError("Behavior must be one of: once, forever.")
+            raise ValueError("Behavior must be one of: none, once, forever.")
         return normalized
 
 

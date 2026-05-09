@@ -201,6 +201,32 @@ class AnnouncementsApiTests(unittest.TestCase):
         self.assertIsNone(updated["embed"])
         self.assertIsNone(updated["actions"])
 
+    def test_behavior_supports_none_for_red_dot_and_popup(self) -> None:
+        request = self._request()
+        self._set_principal("admin")
+
+        created = create_announcement(
+            request,
+            AnnouncementCreateRequest(
+                id="silent",
+                title="Silent",
+                content="No badge, no popup",
+                behavior={"red_dot": "none", "popup": "none"},
+            ),
+        )
+
+        self.assertEqual(created["behavior"], {"red_dot": "none", "popup": "none"})
+
+        updated = update_announcement(
+            created["id"],
+            request,
+            AnnouncementUpdateRequest(
+                behavior={"red_dot": "forever", "popup": "none"},
+            ),
+        )
+
+        self.assertEqual(updated["behavior"], {"red_dot": "forever", "popup": "none"})
+
 
 if __name__ == "__main__":
     unittest.main()
