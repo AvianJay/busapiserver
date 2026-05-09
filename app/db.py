@@ -238,6 +238,28 @@ CREATE INDEX IF NOT EXISTS idx_auth_pending_account_merges_target
     ON auth_pending_account_merges(target_account_id);
 CREATE INDEX IF NOT EXISTS idx_auth_pending_account_merges_expires_at
     ON auth_pending_account_merges(expires_at);
+
+CREATE TABLE IF NOT EXISTS announcements (
+    id             TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    content_type   TEXT NOT NULL DEFAULT 'markdown'
+                   CHECK (content_type IN ('markdown')),
+    author         TEXT,
+    created_at     INTEGER NOT NULL,
+    expire_at      INTEGER,
+    behavior_json  TEXT NOT NULL,
+    targets_json   TEXT,
+    sound_url      TEXT,
+    embed_json     TEXT,
+    actions_json   TEXT,
+    updated_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_announcements_created_at
+    ON announcements(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_announcements_expire_at
+    ON announcements(expire_at);
 """
 
 DOWNLOAD_SCHEMA_SQL = """

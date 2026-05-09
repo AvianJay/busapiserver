@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.analytics import router as analytics_router
+from app.api.announcements import router as announcements_router
 from app.api.auth import router as auth_router
 from app.api.legal import router as legal_router
 from app.api.routes import router
@@ -164,7 +165,7 @@ if settings.cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PATCH"],
         allow_headers=["*"],
     )
 
@@ -207,6 +208,7 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 app.include_router(auth_router)
 app.include_router(analytics_router)
+app.include_router(announcements_router)
 app.include_router(legal_router)
 app.include_router(router)
 app.include_router(metro_router)
