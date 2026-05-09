@@ -189,6 +189,39 @@ class AnnouncementUpdateRequest(BaseModel):
         return self
 
 
+@router.get("/announcements", include_in_schema=False, response_model=None)
+def announcements_page(request: Request):
+    from fastapi.responses import FileResponse, RedirectResponse
+    from pathlib import Path
+    principal = get_request_principal(request)
+    if principal is None:
+        return RedirectResponse("/auth", status_code=302)
+    if principal.role not in _ALLOWED_EDITOR_ROLES:
+        raise HTTPException(status_code=403, detail="Moderator access required.")
+    return FileResponse(
+        Path(__file__).resolve().parents[1] / "web" / "announcements.html",
+        media_type="text/html",
+    )
+
+
+@router.get("/api/v1/announcements/all")
+def list_all_announcements(request: Request) -> list[dict[str, Any]]:
+    """Return ALL announcements including expired (mod/admin only)."""
+    _require_editor(request)
+    with get_connection(request.app.state.settings.db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                id, title, content, content_type, author,
+                created_at, expire_at, behavior_json, targets_json,
+                sound_url, embed_json, actions_json
+            FROM announcements
+            ORDER BY created_at DESC, id DESC
+            """,
+        ).fetchall()
+    return [_row_to_announcement(row) for row in rows]
+
+
 @router.get("/api/v1/announcements")
 def list_announcements(
     request: Request,

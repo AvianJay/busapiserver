@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>YABus 公告管理</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#0b0f1a;--bg2:#111827;--sf:rgba(255,255,255,.04);--sfh:rgba(255,255,255,.07);--sfs:rgba(255,255,255,.1);--ink:#f0f2f5;--ink2:#94a3b8;--mt:#64748b;--ln:rgba(255,255,255,.08);--lns:rgba(255,255,255,.14);--accent:#6ee7b7;--accent2:#a78bfa;--ok:#34d399;--warn:#fb923c;--err:#f87171;--info:#60a5fa;--r:20px;--rs:14px;--rx:10px}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{min-height:100vh;color:var(--ink);background:var(--bg);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+    body::before{content:"";position:fixed;inset:0;background:radial-gradient(ellipse 80% 50% at 20% -10%,rgba(110,231,183,.12),transparent),radial-gradient(ellipse 60% 40% at 80% 10%,rgba(167,139,250,.1),transparent),radial-gradient(ellipse 50% 60% at 50% 100%,rgba(88,101,242,.08),transparent);pointer-events:none;z-index:0}
+    .shell{position:relative;z-index:1;width:min(1100px,calc(100% - 40px));margin:0 auto;padding:40px 0 60px;display:grid;gap:20px}
+    .glass,.card{border:1px solid var(--ln);background:var(--sf);border-radius:var(--r);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);transition:border-color .3s,background .3s}
+    .glass:hover{border-color:var(--lns);background:var(--sfh)}
+    .card{padding:20px;display:grid;gap:10px;background:var(--sfh);transition:border-color .2s,transform .2s;cursor:pointer}
+    .card:hover{border-color:var(--lns);transform:translateY(-2px)}
+    @keyframes fadeInUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(15px,-10px)}}
+    .shell>*{animation:fadeInUp .5s ease both}
+    .shell>:nth-child(2){animation-delay:.08s}
+    .shell>:nth-child(3){animation-delay:.16s}
+    .hero{padding:40px;display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;position:relative;overflow:hidden}
+    .hero::before{content:"";position:absolute;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(110,231,183,.08),transparent 70%);right:-150px;top:-200px;pointer-events:none;animation:float 8s ease-in-out infinite}
+    .hero-left{position:relative;z-index:1}
+    .eyebrow{text-transform:uppercase;letter-spacing:.2em;font-size:11px;font-weight:600;color:var(--accent);margin-bottom:8px}
+    h1{font-size:clamp(26px,4vw,40px);font-weight:800;letter-spacing:-.02em;background:linear-gradient(135deg,#f0f2f5,#94a3b8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    h2{font-size:18px;font-weight:700;letter-spacing:-.01em}
+    h3{font-size:15px;font-weight:600}
+    .panel{padding:28px;display:grid;gap:20px;align-content:start}
+    .panel-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+    .ann-list{display:grid;gap:12px}
+    .card-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+    .card-meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 12px;border:1px solid var(--ln);background:var(--sf);font-size:11px;font-weight:600}
+    .pill-ok{color:var(--ok);border-color:rgba(52,211,153,.25)}
+    .pill-warn{color:var(--warn);border-color:rgba(251,146,60,.25)}
+    .pill-err{color:var(--err);border-color:rgba(248,113,113,.25)}
+    .pill-info{color:var(--info);border-color:rgba(96,165,250,.25)}
+    .mono{font-family:'SF Mono','Cascadia Code','Consolas',monospace;font-size:12px;color:var(--mt)}
+    p{margin:0;color:var(--ink2);font-size:13px}
+    .empty{padding:24px;border-radius:var(--rs);border:1px dashed rgba(255,255,255,.1);color:var(--mt);text-align:center;font-size:13px}
+    .btn{display:inline-flex;justify-content:center;align-items:center;gap:8px;min-height:40px;padding:9px 18px;border-radius:var(--rx);border:1px solid transparent;font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+    .btn:hover:not(:disabled){transform:translateY(-1px)}.btn:disabled{opacity:.4;cursor:not-allowed}
+    .btn-p{color:#0b0f1a;background:linear-gradient(135deg,var(--accent),#34d399);box-shadow:0 4px 20px rgba(110,231,183,.25)}
+    .btn-p:hover:not(:disabled){box-shadow:0 8px 30px rgba(110,231,183,.35)}
+    .btn-g{background:transparent;border-color:var(--lns);color:var(--ink2)}.btn-g:hover:not(:disabled){background:var(--sfh);color:var(--ink)}
+    .btn-d{color:#fff;background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 4px 20px rgba(239,68,68,.2)}
+    .btn-d:hover:not(:disabled){box-shadow:0 8px 30px rgba(239,68,68,.3)}
+    .btn-s{color:#fff;background:linear-gradient(135deg,var(--accent2),#8b5cf6);box-shadow:0 4px 20px rgba(167,139,250,.25)}
+    /* Modal */
+    .overlay{display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);justify-content:center;align-items:start;padding:40px 20px;overflow-y:auto}
+    .overlay.open{display:flex}
+    .modal{width:min(640px,100%);background:var(--bg2);border:1px solid var(--lns);border-radius:var(--r);padding:32px;display:grid;gap:20px;animation:fadeInUp .3s ease}
+    .modal h2{color:var(--ink)}
+    .field{display:grid;gap:6px}
+    .field label{font-size:12px;font-weight:600;color:var(--mt);text-transform:uppercase;letter-spacing:.08em}
+    .field input,.field textarea,.field select{width:100%;padding:10px 14px;border-radius:var(--rx);border:1px solid var(--ln);background:var(--sf);color:var(--ink);font:inherit;font-size:13px;transition:border-color .2s}
+    .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--accent)}
+    .field textarea{min-height:120px;resize:vertical}
+    .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .field-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+    .modal-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+    .notice{padding:16px 20px;border-radius:var(--rs);display:grid;gap:8px}
+    .notice-ok{border:1px solid rgba(52,211,153,.25);background:rgba(52,211,153,.08)}.notice-ok h3{color:var(--ok)}
+    .notice-err{border:1px solid rgba(248,113,113,.25);background:rgba(248,113,113,.08)}.notice-err h3{color:var(--err)}
+    .content-preview{max-height:80px;overflow:hidden;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--mt);line-height:1.5}
+    @media(max-width:680px){.shell{width:calc(100% - 24px);padding-top:24px}.hero,.panel{padding:20px}.field-row,.field-row-3{grid-template-columns:1fr}h1{font-size:24px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero glass">
+      <div class="hero-left">
+        <div class="eyebrow">Announcements</div>
+        <h1>公告管理</h1>
+        <p style="margin-top:8px">建立、編輯與管理應用程式內的公告。</p>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;position:relative;z-index:1">
+        <button class="btn btn-p" id="btnNew">＋ 新增公告</button>
+        <button class="btn btn-g" id="btnRefresh">重新整理</button>
+        <a class="btn btn-g" href="/account">← 帳戶中心</a>
+      </div>
+    </section>
+
+    <section id="noticeArea"></section>
+    <section class="panel glass">
+      <div class="panel-header"><h2>所有公告</h2><span class="mono" id="countLabel"></span></div>
+      <div class="ann-list" id="annList"><div class="empty">載入中…</div></div>
+    </section>
+  </main>
+
+  <!-- Editor Modal -->
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <h2 id="modalTitle">新增公告</h2>
+      <div class="field"><label>ID（留空自動產生）</label><input id="fId" placeholder="my-announcement-id"/></div>
+      <div class="field"><label>標題 *</label><input id="fTitle" required/></div>
+      <div class="field"><label>內容 (Markdown) *</label><textarea id="fContent"></textarea></div>
+      <div class="field-row">
+        <div class="field"><label>作者</label><input id="fAuthor" placeholder="admin"/></div>
+        <div class="field"><label>音效 URL</label><input id="fSound" placeholder="https://..."/></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>建立時間 (Unix)</label><input id="fCreatedAt" type="number"/></div>
+        <div class="field"><label>到期時間 (Unix)</label><input id="fExpireAt" type="number"/></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>紅點行為</label><select id="fRedDot"><option value="once">once</option><option value="forever">forever</option></select></div>
+        <div class="field"><label>彈出行為</label><select id="fPopup"><option value="once">once</option><option value="forever">forever</option></select></div>
+      </div>
+      <div class="field"><label>目標平台（逗號分隔，空白=全平台）</label><input id="fPlatforms" placeholder="android, ios, web"/></div>
+      <div class="field"><label>版本限制</label><input id="fVersion" placeholder=">=1.2.0"/></div>
+      <div class="field-row">
+        <div class="field"><label>Embed 類型</label><input id="fEmbedType" placeholder="image"/></div>
+        <div class="field"><label>Embed URL</label><input id="fEmbedUrl" placeholder="https://..."/></div>
+      </div>
+      <div class="field"><label>Actions (JSON 陣列)</label><textarea id="fActions" style="min-height:60px" placeholder='[{"type":"link","label":"了解更多","url":"https://..."}]'></textarea></div>
+      <div class="modal-actions">
+        <button class="btn btn-g" id="btnCancel" type="button">取消</button>
+        <button class="btn btn-d" id="btnDelete" type="button" style="display:none">刪除</button>
+        <button class="btn btn-p" id="btnSave" type="button">儲存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const AUTH_TOKEN_COOKIE = "yabus_auth_token";
+    const SESSION_KEY = "yabus_auth_session";
+    let announcements = [];
+    let editingId = null;
+
+    function readSession() {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    function readCookieToken() {
+      const p = `${AUTH_TOKEN_COOKIE}=`;
+      const m = document.cookie.split("; ").find(e => e.startsWith(p));
+      return m ? decodeURIComponent(m.slice(p.length)) : "";
+    }
+    function token() {
+      const s = readSession();
+      return (s && s.token) || readCookieToken() || "";
+    }
+    function authHeaders() { const t = token(); return t ? { Authorization: `Bearer ${t}` } : {}; }
+
+    function escapeHtml(s) {
+      const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML;
+    }
+    function fmtTime(ts) {
+      if (!ts) return "—";
+      return new Date(ts * 1000).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+    }
+
+    async function apiFetch(path, opts = {}) {
+      const res = await fetch(path, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      return res.status === 204 ? null : res.json();
+    }
+
+    function showNotice(tone, title, msg) {
+      const a = document.getElementById("noticeArea");
+      const cls = tone === "error" ? "notice-err" : "notice-ok";
+      a.innerHTML = `<div class="notice ${cls} glass"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(msg)}</p></div>`;
+      setTimeout(() => { if (a.firstChild) a.innerHTML = ""; }, 6000);
+    }
+
+    function statusPill(ann) {
+      const now = Math.floor(Date.now() / 1000);
+      if (ann.expire_at && ann.expire_at <= now) return `<span class="pill pill-err">已過期</span>`;
+      if (ann.expire_at) return `<span class="pill pill-warn">限時</span>`;
+      return `<span class="pill pill-ok">啟用中</span>`;
+    }
+
+    function targetsPills(ann) {
+      const parts = [];
+      const t = ann.targets;
+      if (t && t.platforms && t.platforms.length) {
+        parts.push(...t.platforms.map(p => `<span class="pill pill-info">${escapeHtml(p)}</span>`));
+      }
+      if (t && t.version_constraint) {
+        parts.push(`<span class="pill pill-info">${escapeHtml(t.version_constraint)}</span>`);
+      }
+      return parts.join("");
+    }
+
+    function renderList() {
+      const root = document.getElementById("annList");
+      document.getElementById("countLabel").textContent = `共 ${announcements.length} 則`;
+      if (!announcements.length) { root.innerHTML = '<div class="empty">目前沒有任何公告。</div>'; return; }
+      root.innerHTML = announcements.map(a => `
+        <article class="card" data-id="${escapeHtml(a.id)}">
+          <div class="card-head">
+            <h3>${escapeHtml(a.title)}</h3>
+            <div class="card-meta">${statusPill(a)}${targetsPills(a)}</div>
+          </div>
+          <div class="content-preview">${escapeHtml(a.content)}</div>
+          <div class="card-meta">
+            <span class="mono">${escapeHtml(a.id)}</span>
+            <p>${escapeHtml(fmtTime(a.created_at))}</p>
+            ${a.author ? `<p>by ${escapeHtml(a.author)}</p>` : ""}
+          </div>
+        </article>
+      `).join("");
+      root.querySelectorAll(".card").forEach(c => c.addEventListener("click", () => openEditor(c.dataset.id)));
+    }
+
+    async function loadAll() {
+      try {
+        // Use a far-future approach: fetch ALL including expired via the management endpoint
+        // The public API filters by expiry, so we query the DB directly through a custom admin endpoint
+        // Fallback: use public API (only shows non-expired)
+        announcements = await apiFetch("/api/v1/announcements/all");
+        renderList();
+      } catch (e) {
+        showNotice("error", "載入失敗", e.message);
+      }
+    }
+
+    function openEditor(id) {
+      editingId = id || null;
+      document.getElementById("modalTitle").textContent = id ? "編輯公告" : "新增公告";
+      document.getElementById("btnDelete").style.display = id ? "" : "none";
+      const ann = id ? announcements.find(a => a.id === id) : null;
+
+      document.getElementById("fId").value = ann ? ann.id : "";
+      document.getElementById("fId").disabled = !!id;
+      document.getElementById("fTitle").value = ann ? ann.title : "";
+      document.getElementById("fContent").value = ann ? ann.content : "";
+      document.getElementById("fAuthor").value = ann ? (ann.author || "") : "";
+      document.getElementById("fSound").value = ann ? (ann.sound_url || "") : "";
+      document.getElementById("fCreatedAt").value = ann ? (ann.created_at || "") : "";
+      document.getElementById("fExpireAt").value = ann ? (ann.expire_at || "") : "";
+      document.getElementById("fRedDot").value = ann && ann.behavior ? ann.behavior.red_dot : "once";
+      document.getElementById("fPopup").value = ann && ann.behavior ? ann.behavior.popup : "once";
+
+      const targets = ann ? ann.targets : null;
+      document.getElementById("fPlatforms").value = targets && targets.platforms ? targets.platforms.join(", ") : "";
+      document.getElementById("fVersion").value = targets && targets.version_constraint ? targets.version_constraint : "";
+
+      const embed = ann ? ann.embed : null;
+      document.getElementById("fEmbedType").value = embed ? embed.type : "";
+      document.getElementById("fEmbedUrl").value = embed ? embed.url : "";
+
+      document.getElementById("fActions").value = ann && ann.actions ? JSON.stringify(ann.actions, null, 2) : "";
+      document.getElementById("overlay").classList.add("open");
+    }
+
+    function closeEditor() {
+      editingId = null;
+      document.getElementById("overlay").classList.remove("open");
+    }
+
+    function buildPayload() {
+      const title = document.getElementById("fTitle").value.trim();
+      const content = document.getElementById("fContent").value.trim();
+      if (!title || !content) throw new Error("標題和內容為必填。");
+
+      const payload = { title, content, content_type: "markdown" };
+
+      const id = document.getElementById("fId").value.trim();
+      if (id && !editingId) payload.id = id;
+
+      const author = document.getElementById("fAuthor").value.trim();
+      if (author) payload.author = author;
+
+      const sound = document.getElementById("fSound").value.trim();
+      if (sound) payload.sound_url = sound;
+
+      const ca = document.getElementById("fCreatedAt").value.trim();
+      if (ca) payload.created_at = parseInt(ca, 10);
+
+      const ea = document.getElementById("fExpireAt").value.trim();
+      if (ea) payload.expire_at = parseInt(ea, 10);
+
+      payload.behavior = {
+        red_dot: document.getElementById("fRedDot").value,
+        popup: document.getElementById("fPopup").value,
+      };
+
+      const plats = document.getElementById("fPlatforms").value.trim();
+      const vc = document.getElementById("fVersion").value.trim();
+      if (plats || vc) {
+        payload.targets = {};
+        if (plats) payload.targets.platforms = plats.split(",").map(s => s.trim()).filter(Boolean);
+        if (vc) payload.targets.version_constraint = vc;
+      }
+
+      const eType = document.getElementById("fEmbedType").value.trim();
+      const eUrl = document.getElementById("fEmbedUrl").value.trim();
+      if (eType && eUrl) payload.embed = { type: eType, url: eUrl };
+
+      const actRaw = document.getElementById("fActions").value.trim();
+      if (actRaw) {
+        try { payload.actions = JSON.parse(actRaw); } catch { throw new Error("Actions JSON 格式錯誤。"); }
+      }
+
+      return payload;
+    }
+
+    async function save() {
+      try {
+        const payload = buildPayload();
+        const headers = { "Content-Type": "application/json", ...authHeaders() };
+        if (editingId) {
+          await fetch(`/api/v1/announcements/${encodeURIComponent(editingId)}`, {
+            method: "PATCH", headers, body: JSON.stringify(payload),
+          }).then(async r => { if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || `HTTP ${r.status}`); } return r.json(); });
+          showNotice("success", "已更新", `公告「${payload.title}」已更新。`);
+        } else {
+          await fetch("/api/v1/announcements", {
+            method: "POST", headers, body: JSON.stringify(payload),
+          }).then(async r => { if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || `HTTP ${r.status}`); } return r.json(); });
+          showNotice("success", "已建立", `公告「${payload.title}」已建立。`);
+        }
+        closeEditor();
+        await loadAll();
+      } catch (e) {
+        showNotice("error", "儲存失敗", e.message);
+      }
+    }
+
+    async function deleteAnn() {
+      if (!editingId) return;
+      if (!confirm(`確定要讓公告「${editingId}」立即過期嗎？`)) return;
+      try {
+        // No DELETE endpoint — expire it by setting expire_at to now
+        const now = Math.floor(Date.now() / 1000);
+        const headers = { "Content-Type": "application/json", ...authHeaders() };
+        await fetch(`/api/v1/announcements/${encodeURIComponent(editingId)}`, {
+          method: "PATCH", headers, body: JSON.stringify({ expire_at: now }),
+        }).then(async r => { if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || `HTTP ${r.status}`); } return r.json(); });
+        showNotice("success", "已設為過期", `公告已立即過期。`);
+        closeEditor();
+        await loadAll();
+      } catch (e) {
+        showNotice("error", "操作失敗", e.message);
+      }
+    }
+
+    document.getElementById("btnNew").addEventListener("click", () => openEditor(null));
+    document.getElementById("btnRefresh").addEventListener("click", loadAll);
+    document.getElementById("btnCancel").addEventListener("click", closeEditor);
+    document.getElementById("btnSave").addEventListener("click", save);
+    document.getElementById("btnDelete").addEventListener("click", deleteAnn);
+    document.getElementById("overlay").addEventListener("click", e => { if (e.target === e.currentTarget) closeEditor(); });
+
+    // Boot
+    if (!token()) { window.location.replace("/auth"); }
+    else { loadAll(); }
+  </script>
+</body>
+</html>
