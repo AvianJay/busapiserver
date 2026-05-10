@@ -550,6 +550,50 @@ def _copy_non_static_fetch_state(source_connection, target_connection) -> None:
     )
 
 
+# Tables that contain application data unrelated to static route sync.
+# These must be preserved when the temp DB replaces the main DB.
+_NON_STATIC_TABLES = (
+    "accounts",
+    "account_oauth_identities",
+    "account_devices",
+    "account_device_tokens",
+    "auth_oauth_states",
+    "auth_link_state_contexts",
+    "auth_pending_account_merges",
+    "request_analytics",
+    "announcements",
+)
+
+
+def _copy_non_static_tables(source_connection, target_connection) -> None:
+    """Copy all non-static (auth, analytics, announcements) rows from source to target."""
+    for table in _NON_STATIC_TABLES:
+        # Verify table exists in source before copying.
+        exists = source_connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        if exists is None:
+            continue
+
+        columns_info = source_connection.execute(f"PRAGMA table_info({table})").fetchall()
+        if not columns_info:
+            continue
+
+        column_names = [col["name"] for col in columns_info]
+        cols_csv = ", ".join(column_names)
+        placeholders = ", ".join("?" for _ in column_names)
+
+        rows = source_connection.execute(f"SELECT {cols_csv} FROM {table}").fetchall()
+        if not rows:
+            continue
+
+        target_connection.executemany(
+            f"INSERT OR REPLACE INTO {table} ({cols_csv}) VALUES ({placeholders})",
+            [tuple(row) for row in rows],
+        )
+
+
 def _copy_static_fetch_state_for_city(source_connection, target_connection, city: str) -> None:
     _copy_fetch_state_rows(
         source_connection,
@@ -999,6 +1043,7 @@ def sync_static(
                 with connection:
                     _copy_non_static_fetch_state(source_connection, connection)
                     _copy_database_versions(source_connection, connection)
+                    _copy_non_static_tables(source_connection, connection)
 
             processed_cities: set[str] = set()
             processed_prefixes: set[str] = {INTERCITY_PREFIX}
