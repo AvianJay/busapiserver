@@ -13,6 +13,8 @@ SKIP_ANALYTICS_ENDPOINTS = frozenset(
     {
         "/analytics",
         "/api/v1/analytics",
+        "/admin/analytics",
+        "/api/v1/admin/analytics",
     }
 )
 SKIP_ANALYTICS_PREFIXES = (

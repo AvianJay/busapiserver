@@ -177,6 +177,13 @@ def validate_provider(value: str) -> AuthProvider:
     raise AuthError("Invalid auth provider.")
 
 
+def validate_role(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in ALLOWED_ROLES:
+        raise AuthError("Invalid account role.", status_code=400)
+    return normalized
+
+
 def normalize_redirect_uri(value: str | None, platform: AuthPlatform) -> str:
     redirect_uri = (value or "").strip() or default_redirect_uri(platform)
     parsed = urlparse(redirect_uri)
@@ -788,8 +795,6 @@ def _upsert_login(
 
             if identity_row is not None:
                 account_id = int(identity_row["account_id"])
-            elif device_row is not None:
-                account_id = int(device_row["account_id"])
             else:
                 account_id = generate_snowflake(settings)
                 connection.execute(
@@ -1308,6 +1313,104 @@ def account_devices_payload(settings: Settings, principal: AuthPrincipal) -> dic
     }
 
 
+def admin_accounts_payload(settings: Settings) -> dict[str, Any]:
+    with get_connection(settings.db_path) as connection:
+        accounts = _load_admin_account_rows(connection)
+
+    summary = {
+        "total_accounts": len(accounts),
+        "admin_count": sum(1 for account in accounts if account["role"] == "admin"),
+        "mod_count": sum(1 for account in accounts if account["role"] == "mod"),
+        "user_count": sum(1 for account in accounts if account["role"] == "user"),
+        "active_device_count": sum(int(account["active_device_count"]) for account in accounts),
+    }
+    return {
+        "accounts": accounts,
+        "summary": summary,
+    }
+
+
+def update_account_role(
+    settings: Settings,
+    *,
+    account_id: int,
+    role: str,
+) -> dict[str, Any]:
+    normalized_role = validate_role(role)
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current_row = connection.execute(
+                "SELECT role FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if current_row is None:
+                raise AuthError("Account not found.", status_code=404)
+
+            current_role = current_row["role"]
+            if current_role == "admin" and normalized_role != "admin":
+                admin_count_row = connection.execute(
+                    "SELECT COUNT(*) AS admin_count FROM accounts WHERE role = 'admin'",
+                ).fetchone()
+                admin_count = int(admin_count_row["admin_count"] if admin_count_row else 0)
+                if admin_count <= 1:
+                    raise AuthError(
+                        "Cannot demote the last admin account.",
+                        status_code=409,
+                    )
+
+            connection.execute(
+                "UPDATE accounts SET role = ?, updated_at = ? WHERE id = ?",
+                (normalized_role, now, account_id),
+            )
+            updated_accounts = _load_admin_account_rows(connection, account_id=account_id)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    if not updated_accounts:
+        raise AuthError("Account not found.", status_code=404)
+    return updated_accounts[0]
+
+
+def revoke_account_tokens(
+    settings: Settings,
+    *,
+    account_id: int,
+) -> int:
+    now = int(time.time())
+    with get_connection(settings.db_path) as connection:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT 1 FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if existing is None:
+                raise AuthError("Account not found.", status_code=404)
+
+            result = connection.execute(
+                """
+                UPDATE account_device_tokens
+                SET revoked_at = ?
+                WHERE account_id = ? AND revoked_at IS NULL
+                """,
+                (now, account_id),
+            )
+            connection.execute(
+                "UPDATE accounts SET updated_at = ? WHERE id = ?",
+                (now, account_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return int(result.rowcount)
+
+
 def _upsert_oauth_identity_row(
     connection: Any,
     *,
@@ -1410,3 +1513,81 @@ def _merge_roles(current_role: str, source_role: str) -> str:
     if _ROLE_PRIORITY.get(source_role, 0) > _ROLE_PRIORITY.get(current_role, 0):
         return source_role
     return current_role
+
+
+def _load_admin_account_rows(
+    connection: Any,
+    *,
+    account_id: int | None = None,
+) -> list[dict[str, Any]]:
+    params: tuple[Any, ...] = ()
+    where_clause = ""
+    if account_id is not None:
+        where_clause = "WHERE a.id = ?"
+        params = (account_id,)
+
+    account_rows = connection.execute(
+        f"""
+        SELECT
+            a.id,
+            a.role,
+            a.created_at,
+            a.updated_at,
+            COUNT(DISTINCT d.id) AS device_count,
+            COUNT(DISTINCT CASE WHEN t.revoked_at IS NULL THEN d.id END) AS active_device_count,
+            MAX(COALESCE(t.last_used_at, d.last_seen_at)) AS last_seen_at
+        FROM accounts a
+        LEFT JOIN account_devices d
+          ON d.account_id = a.id
+        LEFT JOIN account_device_tokens t
+          ON t.device_id = d.id
+        {where_clause}
+        GROUP BY a.id, a.role, a.created_at, a.updated_at
+        ORDER BY
+            CASE a.role WHEN 'admin' THEN 0 WHEN 'mod' THEN 1 ELSE 2 END,
+            COALESCE(MAX(COALESCE(t.last_used_at, d.last_seen_at)), a.updated_at) DESC,
+            a.created_at DESC
+        """,
+        params,
+    ).fetchall()
+    if not account_rows:
+        return []
+
+    account_ids = [int(row["id"]) for row in account_rows]
+    placeholders = ", ".join("?" for _ in account_ids)
+    identity_rows = connection.execute(
+        f"""
+        SELECT account_id, provider, provider_user_id, email, display_name, avatar_url
+        FROM account_oauth_identities
+        WHERE account_id IN ({placeholders})
+        ORDER BY account_id DESC, provider, provider_user_id
+        """,
+        tuple(account_ids),
+    ).fetchall()
+
+    identities_by_account: dict[int, list[dict[str, Any]]] = {}
+    for row in identity_rows:
+        identity_list = identities_by_account.setdefault(int(row["account_id"]), [])
+        identity_list.append(
+            {
+                "provider": row["provider"],
+                "provider_user_id": row["provider_user_id"],
+                "email": row["email"],
+                "display_name": row["display_name"],
+                "avatar_url": row["avatar_url"],
+            }
+        )
+
+    return [
+        {
+            "account_id": str(row["id"]),
+            "role": row["role"],
+            "created_at": int(row["created_at"]),
+            "updated_at": int(row["updated_at"]),
+            "device_count": int(row["device_count"] or 0),
+            "active_device_count": int(row["active_device_count"] or 0),
+            "last_seen_at": int(row["last_seen_at"]) if row["last_seen_at"] is not None else None,
+            "identities": identities_by_account.get(int(row["id"]), []),
+        }
+        for row in account_rows
+    ]

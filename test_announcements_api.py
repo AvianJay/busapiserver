@@ -86,6 +86,7 @@ class AnnouncementsApiTests(unittest.TestCase):
     def test_main_app_registers_announcement_routes(self) -> None:
         paths = {route.path for route in app.routes}
 
+        self.assertIn("/admin/announcements", paths)
         self.assertIn("/api/v1/announcements", paths)
         self.assertIn("/api/v1/announcements/{announcement_id}", paths)
 

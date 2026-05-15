@@ -1,27 +1,50 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app.rate_limit import enforce_rate_limit
+from app.rate_limit import enforce_rate_limit, get_request_principal
 from app.request_analytics import build_analytics_report
 
 
 router = APIRouter(tags=["analytics"], dependencies=[Depends(enforce_rate_limit)])
 
 
-@router.get("/api/v1/analytics")
+@router.get("/api/v1/admin/analytics")
 def get_analytics(
     request: Request,
     days: int = Query(default=7, ge=0, le=365),
     limit: int = Query(default=20, ge=1, le=200),
 ) -> dict[str, object]:
+    _require_admin(request)
     settings = request.app.state.settings
     return build_analytics_report(settings.db_path, days=days, limit=limit)
 
 
-@router.get("/analytics", include_in_schema=False, response_class=HTMLResponse)
-def analytics_dashboard() -> HTMLResponse:
+@router.get("/api/v1/analytics", include_in_schema=False)
+def legacy_get_analytics(
+    request: Request,
+    days: int = Query(default=7, ge=0, le=365),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict[str, object]:
+    return get_analytics(request, days=days, limit=limit)
+
+
+@router.get("/analytics", include_in_schema=False)
+def legacy_analytics_dashboard() -> RedirectResponse:
+    return RedirectResponse("/admin/analytics", status_code=302)
+
+
+@router.get(
+    "/admin/analytics",
+    include_in_schema=False,
+    response_class=HTMLResponse,
+    response_model=None,
+)
+def analytics_dashboard(request: Request) -> HTMLResponse | RedirectResponse:
+    if get_request_principal(request) is None:
+        return RedirectResponse("/auth", status_code=302)
+    _require_admin(request)
     return HTMLResponse(_analytics_dashboard_html())
 
 
@@ -616,7 +639,7 @@ def _analytics_dashboard_html() -> str:
         : "All-time trend sample";
 
       try {
-        const response = await fetch(`/api/v1/analytics?days=${encodeURIComponent(days)}&limit=${encodeURIComponent(limit)}`, {
+        const response = await fetch(`/api/v1/admin/analytics?days=${encodeURIComponent(days)}&limit=${encodeURIComponent(limit)}`, {
           headers: {
             "Accept": "application/json",
           },
@@ -696,3 +719,11 @@ def _analytics_dashboard_html() -> str:
 </body>
 </html>
 """
+
+
+def _require_admin(request: Request) -> None:
+    principal = get_request_principal(request)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if principal.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required.")

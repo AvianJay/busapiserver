@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YABus Admin Users</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08131a;
+      --bg-accent:
+        radial-gradient(circle at top left, rgba(55, 168, 154, 0.2), transparent 32%),
+        radial-gradient(circle at right top, rgba(244, 114, 36, 0.14), transparent 28%),
+        linear-gradient(180deg, #0b1820 0%, #071117 100%);
+      --panel: rgba(8, 28, 36, 0.78);
+      --panel-strong: rgba(11, 39, 50, 0.92);
+      --border: rgba(182, 230, 223, 0.14);
+      --border-strong: rgba(182, 230, 223, 0.24);
+      --text: #eef8f5;
+      --muted: #9dc0ba;
+      --accent: #53d0bf;
+      --accent-soft: rgba(83, 208, 191, 0.14);
+      --warning: #ffb454;
+      --danger: #ff7a7a;
+      --shadow: 0 24px 50px rgba(0, 0, 0, 0.24);
+      --radius: 24px;
+      --radius-sm: 16px;
+      --radius-xs: 12px;
+      --font-sans: "IBM Plex Sans", "Segoe UI Variable Text", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", "Cascadia Code", ui-monospace, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-accent);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(1240px, calc(100vw - 28px));
+      margin: 0 auto;
+      padding: 28px 0 44px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel,
+    .hero {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(20px);
+    }
+
+    .hero {
+      padding: 28px;
+      display: grid;
+      gap: 18px;
+      background:
+        linear-gradient(135deg, rgba(9, 32, 41, 0.94), rgba(11, 41, 50, 0.76)),
+        var(--panel);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 280px;
+      height: 280px;
+      right: -60px;
+      top: -120px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(83, 208, 191, 0.18), transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-top,
+    .hero-actions,
+    .toolbar,
+    .user-actions,
+    .user-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      letter-spacing: 0.08em;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      letter-spacing: -0.03em;
+    }
+
+    h1 {
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 0.98;
+    }
+
+    h2 {
+      font-size: 22px;
+    }
+
+    h3 {
+      font-size: 17px;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .hero-copy {
+      display: grid;
+      gap: 10px;
+      max-width: 760px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-actions {
+      position: relative;
+      z-index: 1;
+    }
+
+    .button,
+    select,
+    input {
+      font: inherit;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    .button:hover:not(:disabled) {
+      transform: translateY(-1px);
+    }
+
+    .button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .button-primary {
+      background: linear-gradient(135deg, #53d0bf, #2fb7a3);
+      color: #03211d;
+      font-weight: 700;
+    }
+
+    .button-secondary {
+      border-color: var(--border-strong);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .button-danger {
+      border-color: rgba(255, 122, 122, 0.28);
+      background: rgba(255, 122, 122, 0.08);
+      color: #ffd9d9;
+    }
+
+    .panel {
+      padding: 22px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+    }
+
+    .summary-card,
+    .user-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: rgba(8, 34, 43, 0.78);
+    }
+
+    .summary-card {
+      padding: 18px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .summary-card strong {
+      font-size: 28px;
+      letter-spacing: -0.04em;
+    }
+
+    .notice {
+      padding: 14px 18px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: rgba(9, 31, 41, 0.9);
+    }
+
+    .notice.error {
+      border-color: rgba(255, 122, 122, 0.32);
+      background: rgba(80, 19, 19, 0.42);
+    }
+
+    .notice.success {
+      border-color: rgba(83, 208, 191, 0.32);
+      background: rgba(15, 71, 60, 0.42);
+    }
+
+    .toolbar {
+      align-items: end;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+
+    .field input,
+    .role-select {
+      min-height: 42px;
+      padding: 10px 12px;
+      border-radius: var(--radius-xs);
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+    }
+
+    .mono {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      font-size: 12px;
+    }
+
+    .pill.role-admin {
+      border-color: rgba(83, 208, 191, 0.36);
+      color: var(--accent);
+    }
+
+    .pill.role-mod {
+      border-color: rgba(255, 180, 84, 0.28);
+      color: var(--warning);
+    }
+
+    .pill.role-user {
+      border-color: rgba(157, 192, 186, 0.18);
+    }
+
+    .user-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .user-card {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .identity-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .identity {
+      padding: 8px 10px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+      display: grid;
+      gap: 2px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .stats-grid .summary-card {
+      padding: 14px;
+    }
+
+    .empty {
+      padding: 28px;
+      border-radius: var(--radius-sm);
+      border: 1px dashed var(--border);
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: calc(100vw - 20px);
+        padding-top: 18px;
+      }
+
+      .hero,
+      .panel {
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="hero-top">
+        <span class="eyebrow">Admin Console</span>
+      </div>
+      <div class="hero-copy">
+        <h1>用戶管理</h1>
+        <p>查看帳號、綁定身份、角色與活躍裝置，必要時直接調整權限或強制登出全部裝置。</p>
+      </div>
+      <div class="hero-actions">
+        <a class="button button-secondary" href="/admin/analytics">Analytics</a>
+        <a class="button button-secondary" href="/admin/announcements">Announcements</a>
+        <a class="button button-secondary" href="/account">Account</a>
+        <button class="button button-primary" type="button" id="refreshButton">重新整理</button>
+      </div>
+    </section>
+
+    <section id="noticeArea"></section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div>
+          <h2>總覽</h2>
+          <p>快速查看目前帳號角色分布與登入中的裝置數。</p>
+        </div>
+        <div class="field">
+          <label for="searchInput">搜尋</label>
+          <input id="searchInput" type="search" placeholder="帳號 ID / email / 顯示名稱" />
+        </div>
+      </div>
+      <div class="summary-grid" id="summaryGrid"></div>
+    </section>
+
+    <section class="panel">
+      <div>
+        <h2>帳號列表</h2>
+        <p>修改角色後會立即生效。若需要中斷登入中的工作階段，可用強制登出全部裝置。</p>
+      </div>
+      <div class="user-list" id="userList"></div>
+    </section>
+  </main>
+
+  <script>
+    const AUTH_TOKEN_COOKIE = "yabus_auth_token";
+    const SESSION_KEY = "yabus_auth_session";
+
+    const state = {
+      accounts: [],
+      summary: null,
+      busyAccountId: "",
+      filter: "",
+    };
+
+    function readSession() {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) {
+        return null;
+      }
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
+
+    function readCookieToken() {
+      const prefix = `${AUTH_TOKEN_COOKIE}=`;
+      const match = document.cookie.split("; ").find((entry) => entry.startsWith(prefix));
+      return match ? decodeURIComponent(match.slice(prefix.length)) : "";
+    }
+
+    function token() {
+      const session = readSession();
+      return (session && session.token) || readCookieToken() || "";
+    }
+
+    function authHeaders(extra = {}) {
+      const authToken = token();
+      return authToken
+        ? { Authorization: `Bearer ${authToken}`, ...extra }
+        : { ...extra };
+    }
+
+    function escapeHtml(value) {
+      const div = document.createElement("div");
+      div.textContent = value == null ? "" : String(value);
+      return div.innerHTML;
+    }
+
+    function formatTime(value) {
+      if (!value) {
+        return "未記錄";
+      }
+      return new Date(Number(value) * 1000).toLocaleString("zh-TW", {
+        timeZone: "Asia/Taipei",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    async function apiFetch(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: authHeaders(options.headers || {}),
+      });
+      const isJson = (response.headers.get("content-type") || "").includes("application/json");
+      const payload = isJson ? await response.json() : null;
+      if (!response.ok) {
+        if (response.status === 401) {
+          window.location.replace("/auth");
+          return null;
+        }
+        const message = payload && payload.detail ? payload.detail : `HTTP ${response.status}`;
+        throw new Error(message);
+      }
+      return payload;
+    }
+
+    function setNotice(kind, title, message) {
+      const root = document.getElementById("noticeArea");
+      root.innerHTML = `
+        <div class="notice ${kind}">
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(message)}</p>
+        </div>
+      `;
+    }
+
+    function clearNotice() {
+      document.getElementById("noticeArea").innerHTML = "";
+    }
+
+    function roleClass(role) {
+      return role === "admin" ? "role-admin" : role === "mod" ? "role-mod" : "role-user";
+    }
+
+    function matchesFilter(account) {
+      if (!state.filter) {
+        return true;
+      }
+      const haystack = [
+        account.account_id,
+        account.role,
+        ...(account.identities || []).flatMap((identity) => [
+          identity.provider,
+          identity.email,
+          identity.display_name,
+          identity.provider_user_id,
+        ]),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(state.filter);
+    }
+
+    function renderSummary() {
+      const root = document.getElementById("summaryGrid");
+      const summary = state.summary || {};
+      const cards = [
+        ["總帳號", summary.total_accounts || 0],
+        ["Admin", summary.admin_count || 0],
+        ["Mod", summary.mod_count || 0],
+        ["User", summary.user_count || 0],
+        ["活躍裝置", summary.active_device_count || 0],
+      ];
+      root.innerHTML = cards.map(([label, value]) => `
+        <article class="summary-card">
+          <p>${escapeHtml(label)}</p>
+          <strong>${escapeHtml(value)}</strong>
+        </article>
+      `).join("");
+    }
+
+    function renderIdentities(identities) {
+      if (!identities || !identities.length) {
+        return '<div class="empty">這個帳號目前沒有任何 OAuth 身份。</div>';
+      }
+      return `
+        <div class="identity-list">
+          ${identities.map((identity) => `
+            <div class="identity">
+              <strong>${escapeHtml(identity.display_name || identity.email || identity.provider_user_id || identity.provider)}</strong>
+              <span class="muted">${escapeHtml(identity.provider)}</span>
+              ${identity.email ? `<span class="muted">${escapeHtml(identity.email)}</span>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function renderUsers() {
+      const root = document.getElementById("userList");
+      const accounts = state.accounts.filter(matchesFilter);
+      if (!accounts.length) {
+        root.innerHTML = '<div class="empty">沒有符合條件的帳號。</div>';
+        return;
+      }
+
+      root.innerHTML = accounts.map((account) => {
+        const busy = state.busyAccountId === account.account_id;
+        return `
+          <article class="user-card">
+            <div class="user-head">
+              <div>
+                <div class="pill-row">
+                  <span class="pill ${roleClass(account.role)}">${escapeHtml(account.role)}</span>
+                  <span class="pill">帳號 ${escapeHtml(account.account_id)}</span>
+                </div>
+                <p class="mono">${escapeHtml(account.account_id)}</p>
+              </div>
+              <div class="user-actions">
+                <select class="role-select" data-role-select="${escapeHtml(account.account_id)}" ${busy ? "disabled" : ""}>
+                  <option value="admin" ${account.role === "admin" ? "selected" : ""}>admin</option>
+                  <option value="mod" ${account.role === "mod" ? "selected" : ""}>mod</option>
+                  <option value="user" ${account.role === "user" ? "selected" : ""}>user</option>
+                </select>
+                <button class="button button-primary" type="button" data-role-save="${escapeHtml(account.account_id)}" ${busy ? "disabled" : ""}>更新角色</button>
+                <button class="button button-danger" type="button" data-logout-all="${escapeHtml(account.account_id)}" ${busy ? "disabled" : ""}>登出全部裝置</button>
+              </div>
+            </div>
+
+            <div class="stats-grid">
+              <article class="summary-card">
+                <p>建立時間</p>
+                <strong>${escapeHtml(formatTime(account.created_at))}</strong>
+              </article>
+              <article class="summary-card">
+                <p>更新時間</p>
+                <strong>${escapeHtml(formatTime(account.updated_at))}</strong>
+              </article>
+              <article class="summary-card">
+                <p>最後活動</p>
+                <strong>${escapeHtml(formatTime(account.last_seen_at))}</strong>
+              </article>
+              <article class="summary-card">
+                <p>裝置</p>
+                <strong>${escapeHtml(`${account.active_device_count || 0} / ${account.device_count || 0}`)}</strong>
+              </article>
+            </div>
+
+            ${renderIdentities(account.identities || [])}
+          </article>
+        `;
+      }).join("");
+
+      root.querySelectorAll("[data-role-save]").forEach((button) => {
+        button.addEventListener("click", () => handleRoleSave(button.getAttribute("data-role-save") || ""));
+      });
+      root.querySelectorAll("[data-logout-all]").forEach((button) => {
+        button.addEventListener("click", () => handleLogoutAll(button.getAttribute("data-logout-all") || ""));
+      });
+    }
+
+    function render() {
+      renderSummary();
+      renderUsers();
+      document.getElementById("refreshButton").disabled = Boolean(state.busyAccountId);
+    }
+
+    async function loadUsers() {
+      state.busyAccountId = "__loading__";
+      render();
+      try {
+        const payload = await apiFetch("/api/v1/admin/users");
+        if (!payload) {
+          return;
+        }
+        state.accounts = payload.accounts || [];
+        state.summary = payload.summary || null;
+        clearNotice();
+      } catch (error) {
+        setNotice("error", "載入失敗", error.message || String(error));
+      } finally {
+        state.busyAccountId = "";
+        render();
+      }
+    }
+
+    async function handleRoleSave(accountId) {
+      if (!accountId) {
+        return;
+      }
+      const select = document.querySelector(`[data-role-select="${CSS.escape(accountId)}"]`);
+      if (!select) {
+        return;
+      }
+      state.busyAccountId = accountId;
+      render();
+      try {
+        const payload = await apiFetch(`/api/v1/admin/users/${encodeURIComponent(accountId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: select.value }),
+        });
+        setNotice("success", "角色已更新", `帳號 ${payload.account_id} 已改成 ${payload.role}。`);
+        await loadUsers();
+      } catch (error) {
+        setNotice("error", "更新角色失敗", error.message || String(error));
+      } finally {
+        state.busyAccountId = "";
+        render();
+      }
+    }
+
+    async function handleLogoutAll(accountId) {
+      if (!accountId) {
+        return;
+      }
+      if (!window.confirm(`確定要強制登出帳號 ${accountId} 的所有裝置嗎？`)) {
+        return;
+      }
+      state.busyAccountId = accountId;
+      render();
+      try {
+        const payload = await apiFetch(`/api/v1/admin/users/${encodeURIComponent(accountId)}/logout-all`, {
+          method: "POST",
+        });
+        setNotice("success", "已強制登出", `帳號 ${payload.account_id} 已撤銷 ${payload.revoked_sessions} 個工作階段。`);
+        await loadUsers();
+      } catch (error) {
+        setNotice("error", "登出失敗", error.message || String(error));
+      } finally {
+        state.busyAccountId = "";
+        render();
+      }
+    }
+
+    document.getElementById("refreshButton").addEventListener("click", loadUsers);
+    document.getElementById("searchInput").addEventListener("input", (event) => {
+      state.filter = (event.target.value || "").trim().toLowerCase();
+      renderUsers();
+    });
+
+    if (!token()) {
+      window.location.replace("/auth");
+    } else {
+      loadUsers();
+    }
+  </script>
+</body>
+</html>

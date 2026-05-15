@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
+from app.api.admin import router as admin_router
 from app.api.analytics import router as analytics_router
 from app.api.announcements import router as announcements_router
 from app.api.auth import router as auth_router
@@ -207,6 +208,7 @@ async def log_requests(request: Request, call_next):
 
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(analytics_router)
 app.include_router(announcements_router)
 app.include_router(legal_router)

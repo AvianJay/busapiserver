@@ -115,8 +115,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `GET /api/v1/routes/{routeid}/stops`
 - `GET /api/v1/routes/{routeid}/paths/{pathid}/points`
 - `GET /api/v1/database/{name}/version`
-- `GET /api/v1/analytics`
-- `GET /analytics`
+- `GET /api/v1/admin/analytics`
+- `GET /admin/analytics`
+- `GET /admin/announcements`
+- `GET /admin/user_manage`
 
 Example:
 
@@ -178,7 +180,7 @@ curl http://127.0.0.1:8000/api/v1/database/main/version
 Analytics JSON example:
 
 ```bash
-curl "http://127.0.0.1:8000/api/v1/analytics?days=7&limit=20"
+curl "http://127.0.0.1:8000/api/v1/admin/analytics?days=7&limit=20"
 ```
 
 ## Notes
@@ -186,8 +188,9 @@ curl "http://127.0.0.1:8000/api/v1/analytics?days=7&limit=20"
 - All API timestamps are Unix timestamps in seconds.
 - Request analytics are stored in the primary `bus.db` inside `request_analytics`.
 - Custom app user agents in the form `YABus/version-commitHash (Platform)` are parsed separately from browser user agents.
-- `GET /api/v1/analytics` is a read-only aggregate endpoint for request analytics.
-- `GET /analytics` serves a read-only HTML dashboard for those analytics.
+- `GET /api/v1/admin/analytics` is an admin-only aggregate endpoint for request analytics.
+- `GET /admin/analytics` serves the admin analytics dashboard.
+- `GET /admin/announcements` and `GET /admin/user_manage` are staff/admin management pages.
 - Runtime logs are written to `./logs/app.log`.
 - Log lines include local timestamp, log level, and logger name.
 - Logs rotate daily and files older than 7 days are removed automatically.

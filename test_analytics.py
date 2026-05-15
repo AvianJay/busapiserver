@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 
 from app.db import init_db
-from app.request_analytics import build_analytics_report, parse_user_agent, record_request_analytics
+from app.request_analytics import (
+    build_analytics_report,
+    parse_user_agent,
+    record_request_analytics,
+    should_record_analytics,
+)
 
 
 class AnalyticsTests(unittest.TestCase):
@@ -89,6 +94,10 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(recent_report["endpoints"][0]["web_requests"], 1)
         self.assertEqual(recent_report["app_usage"][0]["app_version"], "1.2.3")
         self.assertEqual(recent_report["web_usage"][0]["browser_name"], "Chrome")
+
+    def test_should_skip_admin_analytics_routes(self) -> None:
+        self.assertFalse(should_record_analytics("/admin/analytics"))
+        self.assertFalse(should_record_analytics("/api/v1/admin/analytics"))
 
 
 if __name__ == "__main__":

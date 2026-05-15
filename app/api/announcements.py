@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.db import get_connection
@@ -190,9 +191,14 @@ class AnnouncementUpdateRequest(BaseModel):
 
 
 @router.get("/announcements", include_in_schema=False, response_model=None)
-def announcements_page(request: Request):
-    from fastapi.responses import FileResponse, RedirectResponse
+def legacy_announcements_page() -> RedirectResponse:
+    return RedirectResponse("/admin/announcements", status_code=302)
+
+
+@router.get("/admin/announcements", include_in_schema=False, response_model=None)
+def announcements_page(request: Request) -> FileResponse | RedirectResponse:
     from pathlib import Path
+
     principal = get_request_principal(request)
     if principal is None:
         return RedirectResponse("/auth", status_code=302)

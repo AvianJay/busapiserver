@@ -11,6 +11,7 @@ from app.auth_service import (
     OAuthIdentity,
     _allowed_google_id_token_audiences,
     _upsert_login,
+    admin_accounts_payload,
     account_devices_payload,
     account_payload,
     authenticate_token,
@@ -20,8 +21,10 @@ from app.auth_service import (
     get_pending_account_merge,
     link_oauth_identity,
     normalize_redirect_uri,
+    revoke_account_tokens,
     revoke_all_tokens,
     revoke_token,
+    update_account_role,
 )
 from app.config import Settings
 from app.db import get_connection, init_db
@@ -152,6 +155,46 @@ class AuthServiceTests(unittest.TestCase):
         self.assertEqual(result.provider, "google")
         self.assertEqual(result.display_name, "Google User")
         self.assertIsNotNone(authenticate_token(self.settings, result.token))
+
+    def test_same_device_new_identity_creates_new_account_instead_of_force_linking(self) -> None:
+        device_key = str(uuid4())
+        first_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user-1",
+                email="first@example.test",
+                display_name="First User",
+                avatar_url=None,
+            ),
+            device_key=device_key,
+            redirect_uri="https://bus.example.test/account",
+        )
+        second_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="google-user-2",
+                email="second@example.test",
+                display_name="Second User",
+                avatar_url=None,
+            ),
+            device_key=device_key,
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        self.assertNotEqual(first_login.account_id, second_login.account_id)
+        self.assertEqual(first_login.device_id, second_login.device_id)
+        self.assertIsNone(authenticate_token(self.settings, first_login.token))
+
+        second_principal = authenticate_token(self.settings, second_login.token)
+        self.assertIsNotNone(second_principal)
+        assert second_principal is not None
+        payload = account_payload(self.settings, second_principal)
+        self.assertEqual(
+            [identity["provider_user_id"] for identity in payload["identities"]],
+            ["google-user-2"],
+        )
 
     def test_linking_new_provider_attaches_to_current_account(self) -> None:
         google_login = _upsert_login(
@@ -336,6 +379,65 @@ class AuthServiceTests(unittest.TestCase):
 
         self.assertIsNone(authenticate_token(self.settings, first_login.token))
         self.assertIsNone(authenticate_token(self.settings, second_login.token))
+
+    def test_admin_account_payload_and_role_updates(self) -> None:
+        admin_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id="admin-user",
+                email="admin@example.test",
+                display_name="Admin User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+        member_login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="discord",
+                provider_user_id="member-user",
+                email="member@example.test",
+                display_name="Member User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+
+        with get_connection(self.db_path) as connection:
+            connection.execute(
+                "UPDATE accounts SET role = 'admin' WHERE id = ?",
+                (admin_login.account_id,),
+            )
+            connection.commit()
+
+        payload = admin_accounts_payload(self.settings)
+        self.assertEqual(payload["summary"]["total_accounts"], 2)
+        self.assertEqual(payload["summary"]["admin_count"], 1)
+
+        updated_member = update_account_role(
+            self.settings,
+            account_id=member_login.account_id,
+            role="mod",
+        )
+        self.assertEqual(updated_member["role"], "mod")
+
+        revoked_sessions = revoke_account_tokens(
+            self.settings,
+            account_id=member_login.account_id,
+        )
+        self.assertEqual(revoked_sessions, 1)
+        self.assertIsNone(authenticate_token(self.settings, member_login.token))
+
+        with self.assertRaises(AuthError) as denied:
+            update_account_role(
+                self.settings,
+                account_id=admin_login.account_id,
+                role="user",
+            )
+        self.assertEqual(denied.exception.status_code, 409)
 
 
 if __name__ == "__main__":
