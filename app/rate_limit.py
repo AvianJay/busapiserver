@@ -16,7 +16,7 @@ RATE_LIMIT_WINDOW_SECONDS = 60
 AUTH_TOKEN_COOKIE_NAME = "yabus_auth_token"
 
 _rate_limit_lock = threading.Lock()
-_rate_limit_hits: MutableMapping[tuple[str, str], deque[float]] = {}
+_rate_limit_hits: MutableMapping[tuple[str, str, int], deque[float]] = {}
 _last_cleanup_at = 0.0
 
 
@@ -68,37 +68,45 @@ def _authenticate_request(request: Request) -> AuthPrincipal | None:
     return principal
 
 
-def _prune_stale_hits(window_start: float) -> None:
+def _prune_stale_hits(current: float) -> None:
     stale_keys = [
         key
         for key, hits in _rate_limit_hits.items()
-        if not hits or hits[-1] < window_start
+        if not hits or hits[-1] < (current - key[2])
     ]
     for key in stale_keys:
         _rate_limit_hits.pop(key, None)
 
 
-def check_rate_limit(client_ip: str, bucket: str, *, now: float | None = None) -> None:
+def check_rate_limit(
+    client_ip: str,
+    bucket: str,
+    *,
+    now: float | None = None,
+    requests: int = RATE_LIMIT_REQUESTS,
+    window_seconds: int = RATE_LIMIT_WINDOW_SECONDS,
+    detail: str = "Too many requests. Please try again later.",
+) -> None:
     global _last_cleanup_at
 
     current = time.monotonic() if now is None else now
-    window_start = current - RATE_LIMIT_WINDOW_SECONDS
-    key = (client_ip, bucket)
+    window_start = current - window_seconds
+    key = (client_ip, bucket, window_seconds)
 
     with _rate_limit_lock:
         if current - _last_cleanup_at >= RATE_LIMIT_WINDOW_SECONDS:
-            _prune_stale_hits(window_start)
+            _prune_stale_hits(current)
             _last_cleanup_at = current
 
         hits = _rate_limit_hits.setdefault(key, deque())
         while hits and hits[0] < window_start:
             hits.popleft()
 
-        if len(hits) >= RATE_LIMIT_REQUESTS:
-            retry_after = max(1, int(hits[0] + RATE_LIMIT_WINDOW_SECONDS - current))
+        if len(hits) >= requests:
+            retry_after = max(1, int(hits[0] + window_seconds - current))
             raise HTTPException(
                 status_code=429,
-                detail="Too many requests. Please try again later.",
+                detail=detail,
                 headers={"Retry-After": str(retry_after)},
             )
 
