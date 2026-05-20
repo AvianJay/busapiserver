@@ -562,6 +562,8 @@ _NON_STATIC_TABLES = (
     "auth_pending_account_merges",
     "request_analytics",
     "announcements",
+    "announcement_push_tokens",
+    "feedbacks",
 )
 
 

@@ -111,6 +111,12 @@
         <div class="field"><label>紅點行為</label><select id="fRedDot"><option value="none">none</option><option value="once">once</option><option value="forever">forever</option></select></div>
         <div class="field"><label>彈出行為</label><select id="fPopup"><option value="none">none</option><option value="once">once</option><option value="forever">forever</option></select></div>
       </div>
+      <div class="field" id="pushField">
+        <label style="text-transform:none;letter-spacing:normal">
+          <input id="fSendPush" type="checkbox" style="width:auto;margin-right:8px;vertical-align:middle"/>
+          建立後立即發送 FCM 推播（僅 Android / Web）
+        </label>
+      </div>
       <div class="field"><label>目標平台（逗號分隔，空白=全平台）</label><input id="fPlatforms" placeholder="android, ios, web"/></div>
       <div class="field"><label>版本限制</label><input id="fVersion" placeholder=">=1.2.0"/></div>
       <div class="field-row">
@@ -172,6 +178,21 @@
       setTimeout(() => { if (a.firstChild) a.innerHTML = ""; }, 6000);
     }
 
+    function describePushResult(result) {
+      if (!result || !result.attempted) return "";
+      if (result.skipped) {
+        return `推播未送出：${result.reason || "沒有符合的裝置或尚未完成 FCM 設定。"}`
+      }
+      const summary = `推播結果：成功 ${result.sent || 0}，失敗 ${result.failed || 0}`;
+      if (result.invalidated) {
+        return `${summary}，已清除 ${result.invalidated} 個失效 token。`;
+      }
+      if (result.reason) {
+        return `${summary}。${result.reason}`;
+      }
+      return `${summary}。`;
+    }
+
     function statusPill(ann) {
       const now = Math.floor(Date.now() / 1000);
       if (ann.expire_at && ann.expire_at <= now) return `<span class="pill pill-err">已過期</span>`;
@@ -228,6 +249,7 @@
       editingId = id || null;
       document.getElementById("modalTitle").textContent = id ? "編輯公告" : "新增公告";
       document.getElementById("btnDelete").style.display = id ? "" : "none";
+      document.getElementById("pushField").style.display = id ? "none" : "";
       const ann = id ? announcements.find(a => a.id === id) : null;
 
       document.getElementById("fId").value = ann ? ann.id : "";
@@ -240,6 +262,7 @@
       document.getElementById("fExpireAt").value = ann ? (ann.expire_at || "") : "";
       document.getElementById("fRedDot").value = ann && ann.behavior ? ann.behavior.red_dot : "once";
       document.getElementById("fPopup").value = ann && ann.behavior ? ann.behavior.popup : "once";
+      document.getElementById("fSendPush").checked = false;
 
       const targets = ann ? ann.targets : null;
       document.getElementById("fPlatforms").value = targets && targets.platforms ? targets.platforms.join(", ") : "";
@@ -258,7 +281,7 @@
       document.getElementById("overlay").classList.remove("open");
     }
 
-    function buildPayload() {
+    function buildPayload(includePush = false) {
       const title = document.getElementById("fTitle").value.trim();
       const content = document.getElementById("fContent").value.trim();
       if (!title || !content) throw new Error("標題和內容為必填。");
@@ -302,12 +325,16 @@
         try { payload.actions = JSON.parse(actRaw); } catch { throw new Error("Actions JSON 格式錯誤。"); }
       }
 
+      if (includePush) {
+        payload.send_push_notification = document.getElementById("fSendPush").checked;
+      }
+
       return payload;
     }
 
     async function save() {
       try {
-        const payload = buildPayload();
+        const payload = buildPayload(!editingId);
         const headers = { "Content-Type": "application/json", ...authHeaders() };
         if (editingId) {
           await fetch(`/api/v1/announcements/${encodeURIComponent(editingId)}`, {
@@ -315,10 +342,17 @@
           }).then(async r => { if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || `HTTP ${r.status}`); } return r.json(); });
           showNotice("success", "已更新", `公告「${payload.title}」已更新。`);
         } else {
-          await fetch("/api/v1/announcements", {
+          const created = await fetch("/api/v1/announcements", {
             method: "POST", headers, body: JSON.stringify(payload),
           }).then(async r => { if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || `HTTP ${r.status}`); } return r.json(); });
-          showNotice("success", "已建立", `公告「${payload.title}」已建立。`);
+          const pushMessage = describePushResult(created.push_notification);
+          showNotice(
+            "success",
+            "已建立",
+            pushMessage
+              ? `公告「${payload.title}」已建立。${pushMessage}`
+              : `公告「${payload.title}」已建立。`,
+          );
         }
         closeEditor();
         await loadAll();

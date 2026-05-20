@@ -133,6 +133,17 @@ class Settings:
     google_oauth_client_id: str | None
     google_oauth_client_secret: str | None
     google_native_oauth_client_ids: tuple[str, ...]
+    app_public_base_url: str = "https://busapp.avianjay.sbs"
+    fcm_project_id: str = "yabus-111c1"
+    fcm_service_account_json: str | None = None
+    fcm_service_account_json_path: str | None = None
+    fcm_web_api_key: str = "AIzaSyAMzgL6WxQarMcuXYrrqOHZsxUFVytkcuM"
+    fcm_web_auth_domain: str = "yabus-111c1.firebaseapp.com"
+    fcm_web_storage_bucket: str = "yabus-111c1.firebasestorage.app"
+    fcm_web_messaging_sender_id: str = "1011547280811"
+    fcm_web_app_id: str = "1:1011547280811:web:7e1e0c0a1baa160df7aeee"
+    fcm_web_measurement_id: str = "G-RB7WBXXRQN"
+    fcm_web_vapid_key: str = ""
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -176,6 +187,39 @@ class Settings:
                 os.getenv("GOOGLE_NATIVE_OAUTH_CLIENT_IDS"),
                 (),
             ),
+            app_public_base_url=os.getenv(
+                "APP_PUBLIC_BASE_URL",
+                "https://busapp.avianjay.sbs",
+            ).rstrip("/"),
+            fcm_project_id=os.getenv("FCM_PROJECT_ID", "yabus-111c1").strip()
+            or "yabus-111c1",
+            fcm_service_account_json=os.getenv("FCM_SERVICE_ACCOUNT_JSON"),
+            fcm_service_account_json_path=os.getenv("FCM_SERVICE_ACCOUNT_JSON_PATH"),
+            fcm_web_api_key=os.getenv(
+                "FCM_WEB_API_KEY",
+                "AIzaSyAMzgL6WxQarMcuXYrrqOHZsxUFVytkcuM",
+            ).strip(),
+            fcm_web_auth_domain=os.getenv(
+                "FCM_WEB_AUTH_DOMAIN",
+                "yabus-111c1.firebaseapp.com",
+            ).strip(),
+            fcm_web_storage_bucket=os.getenv(
+                "FCM_WEB_STORAGE_BUCKET",
+                "yabus-111c1.firebasestorage.app",
+            ).strip(),
+            fcm_web_messaging_sender_id=os.getenv(
+                "FCM_WEB_MESSAGING_SENDER_ID",
+                "1011547280811",
+            ).strip(),
+            fcm_web_app_id=os.getenv(
+                "FCM_WEB_APP_ID",
+                "1:1011547280811:web:7e1e0c0a1baa160df7aeee",
+            ).strip(),
+            fcm_web_measurement_id=os.getenv(
+                "FCM_WEB_MEASUREMENT_ID",
+                "G-RB7WBXXRQN",
+            ).strip(),
+            fcm_web_vapid_key=os.getenv("FCM_WEB_VAPID_KEY", "").strip(),
         )
 
     def require_tdx_credentials(self) -> None:

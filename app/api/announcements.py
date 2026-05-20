@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.db import get_connection
+from app.fcm import send_announcement_push
 from app.rate_limit import enforce_rate_limit, get_request_principal
 from app.request_analytics import parse_user_agent
 
@@ -118,6 +119,7 @@ class AnnouncementCreateRequest(BaseModel):
     sound_url: str | None = None
     embed: AnnouncementEmbedPayload | None = None
     actions: list[AnnouncementActionPayload] | None = None
+    send_push_notification: bool = False
 
     @field_validator("id", "title", "content", "content_type", "author", "sound_url")
     @classmethod
@@ -310,7 +312,14 @@ def create_announcement(
             raise HTTPException(status_code=409, detail="Announcement already exists.")
         _upsert_announcement(connection, announcement, updated_at=now)
         connection.commit()
-    return announcement
+    if not payload.send_push_notification:
+        return announcement
+
+    push_result = send_announcement_push(request.app.state.settings, announcement)
+    return {
+        **announcement,
+        "push_notification": push_result,
+    }
 
 
 @router.patch("/api/v1/announcements/{announcement_id}")

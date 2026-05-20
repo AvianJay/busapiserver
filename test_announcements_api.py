@@ -64,9 +64,11 @@ class AnnouncementsApiTests(unittest.TestCase):
         init_db(self.db_path)
         self.settings = _settings(self.db_path)
         self._original_get_request_principal = announcements_api.get_request_principal
+        self._original_send_announcement_push = announcements_api.send_announcement_push
 
     def tearDown(self) -> None:
         announcements_api.get_request_principal = self._original_get_request_principal
+        announcements_api.send_announcement_push = self._original_send_announcement_push
         self.temp_dir.cleanup()
 
     def _request(self, *, user_agent: str = "YABus/1.3.1-abc123 (android)") -> _FakeRequest:
@@ -227,6 +229,35 @@ class AnnouncementsApiTests(unittest.TestCase):
         )
 
         self.assertEqual(updated["behavior"], {"red_dot": "forever", "popup": "none"})
+
+    def test_create_with_push_flag_calls_sender_once(self) -> None:
+        request = self._request()
+        self._set_principal("admin")
+        calls: list[dict[str, object]] = []
+        announcements_api.send_announcement_push = lambda settings, announcement: (
+            calls.append({"settings": settings, "announcement": dict(announcement)}) or {
+                "attempted": True,
+                "sent": 2,
+                "failed": 0,
+                "invalidated": 0,
+                "skipped": False,
+            }
+        )
+
+        created = create_announcement(
+            request,
+            AnnouncementCreateRequest(
+                id="push-test",
+                title="Push",
+                content="Send it",
+                send_push_notification=True,
+            ),
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["settings"], self.settings)
+        self.assertEqual(calls[0]["announcement"]["id"], "push-test")
+        self.assertEqual(created["push_notification"]["sent"], 2)
 
 
 if __name__ == "__main__":

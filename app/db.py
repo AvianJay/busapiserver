@@ -260,6 +260,43 @@ CREATE INDEX IF NOT EXISTS idx_announcements_created_at
     ON announcements(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announcements_expire_at
     ON announcements(expire_at);
+
+CREATE TABLE IF NOT EXISTS announcement_push_tokens (
+    token        TEXT PRIMARY KEY,
+    platform     TEXT NOT NULL
+                 CHECK (platform IN ('android', 'web')),
+    user_agent   TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_announcement_push_tokens_platform
+    ON announcement_push_tokens(platform);
+CREATE INDEX IF NOT EXISTS idx_announcement_push_tokens_last_seen_at
+    ON announcement_push_tokens(last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS feedbacks (
+    id              INTEGER PRIMARY KEY,
+    account_id      INTEGER NOT NULL,
+    title           TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    client_family   TEXT NOT NULL,
+    platform_name   TEXT,
+    system_name     TEXT,
+    system_version  TEXT,
+    app_version     TEXT,
+    app_commit_hash TEXT,
+    browser_name    TEXT,
+    browser_version TEXT,
+    user_agent      TEXT NOT NULL,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedbacks_created_at
+    ON feedbacks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_account
+    ON feedbacks(account_id);
 """
 
 DOWNLOAD_SCHEMA_SQL = """
