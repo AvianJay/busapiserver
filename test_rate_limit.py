@@ -45,6 +45,32 @@ class RateLimitTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             check_rate_limit("user:123", "global", now=float(RATE_LIMIT_REQUESTS))
 
+    def test_custom_bucket_can_use_tighter_limit(self) -> None:
+        check_rate_limit(
+            "user:123",
+            "feedback-submit",
+            now=0.0,
+            requests=1,
+            window_seconds=60,
+            detail="Feedback submissions are limited to 1 per minute.",
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            check_rate_limit(
+                "user:123",
+                "feedback-submit",
+                now=1.0,
+                requests=1,
+                window_seconds=60,
+                detail="Feedback submissions are limited to 1 per minute.",
+            )
+
+        self.assertEqual(context.exception.status_code, 429)
+        self.assertEqual(
+            context.exception.detail,
+            "Feedback submissions are limited to 1 per minute.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
