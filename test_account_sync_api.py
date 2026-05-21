@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
+
+from fastapi import HTTPException, Response
+
+from app.api import account_sync as account_sync_api
+from app.auth_service import AuthPrincipal, OAuthIdentity, _upsert_login
+from app.config import Settings
+from app.db import get_connection, init_db
+from app.main import app
+
+
+def _settings(
+    db_path: Path,
+    *,
+    account_sync_max_payload_bytes: int = 512 * 1024,
+) -> Settings:
+    return Settings(
+        project_dir=db_path.parent,
+        db_path=db_path,
+        download_db_path=db_path.parent / "downloads" / "bus.db",
+        tdx_client_id=None,
+        tdx_client_secret=None,
+        tdx_base_url="https://example.test",
+        tdx_token_url="https://example.test/token",
+        tdx_cities=(),
+        tdx_request_timeout=30,
+        tdx_token_refresh_skew=300,
+        tdx_retry_attempts=1,
+        tdx_retry_backoff=1.0,
+        tdx_min_request_interval=0.0,
+        realtime_cache_ttl=5,
+        realtime_track_ttl=30,
+        cors_origins=(),
+        auth_public_base_url="https://bus.example.test",
+        auth_state_ttl_seconds=600,
+        auth_snowflake_node_id=0,
+        discord_oauth_client_id="discord-client",
+        discord_oauth_client_secret="discord-secret",
+        google_oauth_client_id="google-client",
+        google_oauth_client_secret="google-secret",
+        google_native_oauth_client_ids=("android-client", "ios-client"),
+        account_sync_max_payload_bytes=account_sync_max_payload_bytes,
+    )
+
+
+class _FakeRequest:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        body: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.app = SimpleNamespace(state=SimpleNamespace(settings=settings))
+        self.headers = headers or {}
+        self.state = SimpleNamespace()
+        self._body = body
+
+    async def body(self) -> bytes:
+        return self._body
+
+
+class AccountSyncApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "bus.db"
+        init_db(self.db_path)
+        self.settings = _settings(self.db_path)
+        self._original_get_request_principal = account_sync_api.get_request_principal
+
+    def tearDown(self) -> None:
+        account_sync_api.get_request_principal = self._original_get_request_principal
+        self.temp_dir.cleanup()
+
+    def _set_principal(self, account_id: int | None) -> None:
+        if account_id is None:
+            account_sync_api.get_request_principal = lambda request: None
+            return
+        account_sync_api.get_request_principal = lambda request: AuthPrincipal(
+            account_id=account_id,
+            device_id=2,
+            token_id=3,
+            role="user",
+        )
+
+    def _create_account(self, *, provider: str = "google", user_id: str | None = None) -> int:
+        login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider=provider,
+                provider_user_id=user_id or str(uuid4()),
+                email="sync@example.test",
+                display_name="Sync User",
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+        return login.account_id
+
+    def _put_document(
+        self,
+        namespace: str,
+        payload: dict[str, object],
+        *,
+        headers: dict[str, str] | None = None,
+        settings: Settings | None = None,
+    ) -> tuple[Response, dict[str, object]]:
+        response = Response()
+        request = _FakeRequest(
+            settings or self.settings,
+            body=json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+        )
+        result = asyncio.run(
+            account_sync_api.put_account_sync_document(
+                request,
+                response,
+                namespace,  # type: ignore[arg-type]
+            )
+        )
+        return response, result
+
+    def test_main_app_registers_account_sync_routes(self) -> None:
+        paths = {route.path for route in app.routes}
+
+        self.assertIn("/api/v1/account/sync", paths)
+        self.assertIn("/api/v1/account/sync/{namespace}", paths)
+
+    def test_sync_endpoints_require_login(self) -> None:
+        self._set_principal(None)
+        request = _FakeRequest(self.settings)
+
+        with self.assertRaises(HTTPException) as summary_error:
+            account_sync_api.account_sync_status(request, Response())
+        self.assertEqual(summary_error.exception.status_code, 401)
+
+        with self.assertRaises(HTTPException) as put_error:
+            asyncio.run(
+                account_sync_api.put_account_sync_document(
+                    request,
+                    Response(),
+                    "favorites",  # type: ignore[arg-type]
+                )
+            )
+        self.assertEqual(put_error.exception.status_code, 401)
+
+    def test_favorites_sync_creates_document_prunes_empty_groups_and_sets_headers(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+
+        response, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T01:02:03Z",
+                "payload": {
+                    "groups": {
+                        " 通勤 ": [
+                            {
+                                "provider": "TPE",
+                                "routeKey": 123,
+                                "pathId": 0,
+                                "stopId": 456,
+                                "routeName": "紅 12 ",
+                                "stopName": " 市政府 ",
+                                "destinationStopId": 789,
+                            }
+                        ],
+                        "空分類": [],
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(result["status"], "created")
+        document = result["document"]
+        assert isinstance(document, dict)
+        self.assertTrue(document["has_data"])
+        self.assertEqual(document["revision"], 1)
+        self.assertEqual(document["payload"]["groups"], {  # type: ignore[index]
+            "通勤": [
+                {
+                    "provider": "tpe",
+                    "routeKey": 123,
+                    "pathId": 0,
+                    "stopId": 456,
+                    "routeName": "紅 12",
+                    "stopName": "市政府",
+                    "destinationPathId": 0,
+                    "destinationStopId": 789,
+                }
+            ]
+        })
+        self.assertIn("ETag", response.headers)
+        self.assertIn("Last-Modified", response.headers)
+        self.assertEqual(response.headers["X-YABUS-Sync-Revision"], "1")
+
+        with get_connection(self.db_path) as connection:
+            row = connection.execute(
+                """
+                SELECT namespace, schema_version, revision, payload_size_bytes
+                FROM account_sync_documents
+                WHERE account_id = ? AND namespace = 'favorites'
+                """,
+                (account_id,),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["namespace"], "favorites")
+        self.assertEqual(int(row["schema_version"]), 1)
+        self.assertEqual(int(row["revision"]), 1)
+        self.assertGreater(int(row["payload_size_bytes"]), 0)
+
+    def test_account_sync_status_lists_documents(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        self._put_document(
+            "preferences",
+            {
+                "schema_version": 3,
+                "client_modified_at": "2026-05-21T02:00:00+08:00",
+                "payload": {
+                    "themeMode": "dark",
+                    "seedColor": 4280391411,
+                },
+            },
+        )
+
+        response = Response()
+        payload = account_sync_api.account_sync_status(
+            _FakeRequest(self.settings),
+            response,
+        )
+
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertIn("server_time", payload)
+        self.assertFalse(payload["documents"]["favorites"]["has_data"])
+        self.assertTrue(payload["documents"]["preferences"]["has_data"])
+        self.assertEqual(payload["documents"]["preferences"]["schema_version"], 3)
+
+    def test_get_document_returns_304_when_etag_matches(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        put_response, put_result = self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T02:00:00Z",
+                "payload": {"themeMode": "dark"},
+            },
+        )
+        etag = put_response.headers["ETag"]
+        self.assertTrue(etag)
+
+        result = account_sync_api.account_sync_document(
+            _FakeRequest(self.settings, headers={"if-none-match": etag}),
+            Response(),
+            "preferences",  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(result.status_code, 304)  # type: ignore[union-attr]
+        self.assertEqual(result.headers["ETag"], put_result["document"]["etag"])  # type: ignore[index]
+
+    def test_favorites_validation_rejects_too_many_favorites(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        favorites = [
+            {
+                "provider": "tpe",
+                "routeKey": index + 1,
+                "pathId": 0,
+                "stopId": index + 1000,
+            }
+            for index in range(26)
+        ]
+
+        with self.assertRaises(HTTPException) as context:
+            self._put_document(
+                "favorites",
+                {
+                    "schema_version": 1,
+                    "client_modified_at": "2026-05-21T03:00:00Z",
+                    "payload": {"groups": {"A": favorites}},
+                },
+            )
+
+        self.assertEqual(context.exception.status_code, 422)
+        self.assertIn("maximum of 25 items", context.exception.detail)
+
+    def test_request_size_limit_is_enforced(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        small_settings = _settings(self.db_path, account_sync_max_payload_bytes=80)
+
+        oversized_body = {
+            "schema_version": 1,
+            "client_modified_at": "2026-05-21T03:00:00Z",
+            "payload": {"themeMode": "dark", "note": "x" * 200},
+        }
+
+        with self.assertRaises(HTTPException) as context:
+            self._put_document("preferences", oversized_body, settings=small_settings)
+
+        self.assertEqual(context.exception.status_code, 413)
+        self.assertIn("configured limit", context.exception.detail)
+
+    def test_preferences_merge_preserves_disjoint_changes(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+
+        first_response, first_result = self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T04:00:00Z",
+                "payload": {
+                    "themeMode": "dark",
+                },
+            },
+        )
+        self.assertEqual(first_response.status_code, 201)
+        self.assertEqual(first_result["document"]["revision"], 1)  # type: ignore[index]
+
+        second_response, second_result = self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T04:05:00Z",
+                "base_revision": 1,
+                "payload": {
+                    "themeMode": "dark",
+                    "appUpdateCheckMode": "popup",
+                },
+            },
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_result["document"]["revision"], 2)  # type: ignore[index]
+
+        merge_response, merge_result = self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T04:06:00Z",
+                "base_revision": 1,
+                "conflict_policy": "merge",
+                "payload": {
+                    "themeMode": "dark",
+                    "mobileMapProvider": "googleMaps",
+                },
+            },
+        )
+
+        self.assertEqual(merge_response.status_code, 200)
+        self.assertEqual(merge_result["status"], "merged")
+        self.assertEqual(merge_result["document"]["revision"], 3)  # type: ignore[index]
+        self.assertEqual(
+            merge_result["document"]["payload"],  # type: ignore[index]
+            {
+                "themeMode": "dark",
+                "appUpdateCheckMode": "popup",
+                "mobileMapProvider": "googleMaps",
+            },
+        )
+
+    def test_preferences_conflict_returns_resolution_options(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+
+        self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T05:00:00Z",
+                "payload": {"themeMode": "dark"},
+            },
+        )
+        self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T05:05:00Z",
+                "base_revision": 1,
+                "payload": {"themeMode": "light"},
+            },
+        )
+
+        conflict_response, conflict_result = self._put_document(
+            "preferences",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T05:06:00Z",
+                "base_revision": 1,
+                "payload": {"themeMode": "system"},
+            },
+        )
+
+        self.assertEqual(conflict_response.status_code, 409)
+        self.assertEqual(conflict_result["status"], "conflict")
+        self.assertEqual(
+            conflict_result["resolution_options"],
+            ["client_wins", "server_wins", "merge"],
+        )
+        self.assertEqual(conflict_result["server_document"]["revision"], 2)
+        self.assertEqual(conflict_result["merge_preview"]["status"], "not_possible")
+
+
+if __name__ == "__main__":
+    unittest.main()

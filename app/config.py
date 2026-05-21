@@ -144,6 +144,10 @@ class Settings:
     fcm_web_app_id: str = "1:1011547280811:web:7e1e0c0a1baa160df7aeee"
     fcm_web_measurement_id: str = "G-RB7WBXXRQN"
     fcm_web_vapid_key: str = ""
+    account_sync_max_payload_bytes: int = 512 * 1024
+    account_sync_max_favorites: int = 25
+    account_sync_max_group_name_length: int = 120
+    account_sync_max_json_depth: int = 16
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -220,6 +224,18 @@ class Settings:
                 "G-RB7WBXXRQN",
             ).strip(),
             fcm_web_vapid_key=os.getenv("FCM_WEB_VAPID_KEY", "").strip(),
+            account_sync_max_payload_bytes=int(
+                os.getenv("ACCOUNT_SYNC_MAX_PAYLOAD_BYTES", str(512 * 1024))
+            ),
+            account_sync_max_favorites=int(
+                os.getenv("ACCOUNT_SYNC_MAX_FAVORITES", "25")
+            ),
+            account_sync_max_group_name_length=int(
+                os.getenv("ACCOUNT_SYNC_MAX_GROUP_NAME_LENGTH", "120")
+            ),
+            account_sync_max_json_depth=int(
+                os.getenv("ACCOUNT_SYNC_MAX_JSON_DEPTH", "16")
+            ),
         )
 
     def require_tdx_credentials(self) -> None:

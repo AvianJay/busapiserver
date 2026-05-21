@@ -12,6 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.api.admin import router as admin_router
 from app.api.analytics import router as analytics_router
 from app.api.announcements import router as announcements_router
+from app.api.account_sync import router as account_sync_router
 from app.api.auth import router as auth_router
 from app.api.feedback import router as feedback_router
 from app.api.legal import router as legal_router
@@ -213,6 +214,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(analytics_router)
 app.include_router(announcements_router)
+app.include_router(account_sync_router)
 app.include_router(feedback_router)
 app.include_router(legal_router)
 app.include_router(push_router)
