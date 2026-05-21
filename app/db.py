@@ -295,6 +295,27 @@ CREATE INDEX IF NOT EXISTS idx_feedbacks_created_at
     ON feedbacks(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_account
     ON feedbacks(account_id);
+
+CREATE TABLE IF NOT EXISTS account_sync_documents (
+    account_id               INTEGER NOT NULL,
+    namespace                TEXT NOT NULL,
+    schema_version           INTEGER NOT NULL,
+    payload_json             TEXT NOT NULL,
+    payload_size_bytes       INTEGER NOT NULL,
+    content_hash             TEXT NOT NULL,
+    revision                 INTEGER NOT NULL,
+    created_at               INTEGER NOT NULL,
+    updated_at               INTEGER NOT NULL,
+    last_synced_at           INTEGER NOT NULL,
+    last_client_modified_at  TEXT,
+    PRIMARY KEY (account_id, namespace),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_sync_documents_account
+    ON account_sync_documents(account_id);
+CREATE INDEX IF NOT EXISTS idx_account_sync_documents_updated_at
+    ON account_sync_documents(updated_at DESC);
 """
 
 DOWNLOAD_SCHEMA_SQL = """

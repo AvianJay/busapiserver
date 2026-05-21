@@ -564,6 +564,7 @@ _NON_STATIC_TABLES = (
     "announcements",
     "announcement_push_tokens",
     "feedbacks",
+    "account_sync_documents",
 )
 
 
