@@ -20,7 +20,7 @@ from app.sync_realtime import RouteNotFoundError
 LOGGER = get_logger("routes")
 
 
-router = APIRouter(dependencies=[Depends(enforce_rate_limit)])
+router = APIRouter(tags=["Bus"], dependencies=[Depends(enforce_rate_limit)])
 
 _download_name_pattern = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 

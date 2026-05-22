@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import threading
@@ -31,6 +32,7 @@ from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient
 
 LOGGER = get_logger("main")
+CORS_ALLOW_METHODS = ("GET", "POST", "PATCH", "PUT")
 
 
 def _next_monday_4am(now: datetime) -> datetime:
@@ -163,15 +165,23 @@ app = FastAPI(
     openapi_url="/info/openapi.json",
 )
 
-settings = get_settings()
-if settings.cors_origins:
-    # get_settings() is lru_cache'd so this returns the same instance used in lifespan.
+
+def configure_cors(app: FastAPI, origins: Sequence[str]) -> None:
+    if not origins:
+        return
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=list(settings.cors_origins),
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_origins=list(origins),
+        # Account sync writes use PUT, so web preflights must advertise it.
+        allow_methods=list(CORS_ALLOW_METHODS),
         allow_headers=["*"],
     )
+
+
+settings = get_settings()
+# get_settings() is lru_cache'd so this returns the same instance used in lifespan.
+configure_cors(app, settings.cors_origins)
 
 
 @app.middleware("http")
