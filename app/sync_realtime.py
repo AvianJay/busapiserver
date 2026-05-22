@@ -431,6 +431,170 @@ class RealtimeService:
 
         return self._build_snapshot(routeid, static_route, [])
 
+    def get_batch_snapshots(self, routeids: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch realtime snapshots for multiple route IDs at once.
+
+        Routes are grouped by city so each city generates a single TDX batch
+        request, drastically reducing the number of HTTP calls compared to
+        requesting each route individually.  Results are served from the
+        per-route cache when fresh; only routes whose cache entries are stale
+        or missing trigger a TDX refresh.
+
+        Returns a mapping of routeid -> snapshot for every route that was
+        successfully resolved.  Unknown route IDs are silently omitted.
+        """
+        deduped_routeids = sorted(set(routeids))
+        if not deduped_routeids:
+            return {}
+
+        # Pre-populate from cache.
+        results: dict[str, dict[str, Any]] = {}
+        routes_needing_refresh: list[str] = []
+        for routeid in deduped_routeids:
+            cached = self._get_cached(routeid)
+            if cached is not None:
+                results[routeid] = cached
+            else:
+                routes_needing_refresh.append(routeid)
+
+        if not routes_needing_refresh:
+            return results
+
+        # Group routes that still need a refresh by city.
+        routes_by_city: dict[str, list[str]] = {}
+        for routeid in routes_needing_refresh:
+            city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
+            if city is not None:
+                routes_by_city.setdefault(city, []).append(routeid)
+
+        # Refresh each city group.
+        for city, city_routeids in routes_by_city.items():
+            # Ensure all routes are tracked so _refresh_city_cache_for_routes
+            # includes them in the batch.
+            for routeid in city_routeids:
+                self._track_route(city, routeid)
+
+            city_lock = self._get_city_refresh_lock(city)
+            with city_lock:
+                try:
+                    self._refresh_city_cache_for_routes(city, city_routeids)
+                except Exception:
+                    LOGGER.warning(
+                        "batch realtime refresh failed for city=%s routes=%s",
+                        city,
+                        len(city_routeids),
+                    )
+
+            # Pick up whatever landed in cache (including stale fallbacks).
+            for routeid in city_routeids:
+                cached = self._get_cached(routeid, allow_expired=True)
+                if cached is not None:
+                    self._set_cached(routeid, cached)
+                    results[routeid] = cached
+
+        # Handle routes without a known city (single-route fallback).
+        for routeid in routes_needing_refresh:
+            if routeid in results:
+                continue
+            city = guess_city_from_routeid(routeid, self.settings.tdx_cities)
+            if city is not None:
+                continue  # already handled above
+
+            static_route = self._load_static_route(routeid)
+            if static_route is None:
+                continue
+            try:
+                snapshot = self._get_single_route_snapshot(
+                    routeid, static_route, force_refresh=False,
+                )
+                results[routeid] = snapshot
+            except Exception:
+                LOGGER.warning(
+                    "batch single-route fallback failed routeid=%s",
+                    routeid,
+                )
+
+        return results
+
+    def _refresh_city_cache_for_routes(
+        self,
+        city: str,
+        routeids: list[str],
+    ) -> None:
+        """Refresh the cache for *exactly* the given routeids within *city*.
+
+        Unlike ``_refresh_city_cache`` (which uses the tracked-routes set),
+        this method operates on the explicit list supplied by the caller,
+        making it suitable for batch endpoint use-cases where the caller
+        already knows which routes they need.
+        """
+        static_routes: dict[str, dict[str, Any]] = {}
+        with get_connection(self.settings.db_path) as connection:
+            for routeid in routeids:
+                static_route = load_route_static(connection, routeid)
+                if static_route is not None:
+                    static_routes[routeid] = static_route
+
+        if not static_routes:
+            return
+
+        effective_routeids = sorted(static_routes)
+        stale_snapshots = {
+            routeid: self._get_cached(routeid, allow_expired=True)
+            for routeid in effective_routeids
+        }
+
+        resource_key = _batched_resource_key("realtime_eta", city, effective_routeids)
+        with get_connection(self.settings.db_path) as connection:
+            previous_state = None
+            if all(snapshot is not None for snapshot in stale_snapshots.values()):
+                previous_state = load_tdx_fetch_state(connection, resource_key)
+
+            response = self.client.fetch_estimated_time_of_arrival_batch(
+                city,
+                effective_routeids,
+                if_modified_since=None
+                if previous_state is None
+                else previous_state.get("last_modified"),
+            )
+
+            checked_at = int(time.time())
+            _persist_fetch_state(connection, resource_key, response, checked_at, previous_state)
+            _prune_old_realtime_fetch_state(connection, checked_at)
+            connection.commit()
+
+        if response.not_modified:
+            LOGGER.info(
+                "batch realtime not modified city=%s routes=%s",
+                city,
+                len(effective_routeids),
+            )
+            for routeid, snapshot in stale_snapshots.items():
+                if snapshot is not None:
+                    self._set_cached(routeid, snapshot)
+            return
+
+        LOGGER.info(
+            "batch realtime refreshed city=%s routes=%s status=%s items=%s",
+            city,
+            len(effective_routeids),
+            response.status_code,
+            len(response.payload or []),
+        )
+
+        items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in response.payload or []:
+            routeid = _tdx_routeid_to_local(
+                city,
+                item.get("SubRouteUID") or item.get("RouteUID"),
+            )
+            if routeid in static_routes:
+                items_by_route[routeid].append(item)
+
+        for routeid, static_route in static_routes.items():
+            snapshot = self._build_snapshot(routeid, static_route, items_by_route.get(routeid, []))
+            self._set_cached(routeid, snapshot)
+
     def _refresh_city_cache(
         self,
         city: str,

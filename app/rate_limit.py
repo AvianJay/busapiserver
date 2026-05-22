@@ -40,6 +40,12 @@ def _normalize_bucket(route_template: str) -> str:
     # Keep all route realtime variants in the same bucket so they share the cap.
     if route_template.startswith("/api/v1/routes/") and "realtime" in route_template:
         return "/api/v1/routes/realtime"
+    # The batch-realtime endpoint does one server-side TDX request per city
+    # regardless of how many route IDs the client specifies, so it should
+    # consume far fewer rate-limit tokens than the equivalent number of
+    # single-route calls.  Map it to its own generous bucket.
+    if route_template == "/api/v1/batchroutes/{routeids}/realtime":
+        return "/api/v1/batchroutes/realtime"
     return route_template
 
 

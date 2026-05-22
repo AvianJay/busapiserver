@@ -11,8 +11,8 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
-from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists
-from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME
+from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists, route_exists
+from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME, guess_city_from_routeid
 from app.logging_utils import get_logger
 from app.rate_limit import enforce_rate_limit
 from app.sync_realtime import RouteNotFoundError
@@ -333,6 +333,54 @@ def download_city_db(name: str, request: Request) -> FileResponse:
     if not db_path.exists():
         raise HTTPException(status_code=404, detail=f"{name}.db does not exist yet.")
     return FileResponse(db_path, filename=f"{name}.db")
+
+
+_BATCH_ROUTES_REALTIME_MAX_IDS = 25
+_batch_routeid_pattern = re.compile(r"^[A-Za-z]{3}[A-Za-z0-9_-]+$")
+
+
+@router.get("/api/v1/batchroutes/{routeids}/realtime")
+def get_batch_routes_realtime(routeids: str, request: Request) -> dict:
+    """Return realtime snapshots for up to 25 comma-separated route IDs.
+
+    The server groups routes by city and makes one TDX batch request per
+    city, which is far more efficient than the client calling the single-
+    route endpoint 25 times and avoids 429 errors.
+    """
+    parts = [p.strip() for p in routeids.split(",") if p.strip()]
+    if not parts:
+        raise HTTPException(status_code=400, detail="No route IDs provided.")
+    if len(parts) > _BATCH_ROUTES_REALTIME_MAX_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many route IDs (max {_BATCH_ROUTES_REALTIME_MAX_IDS}, got {len(parts)}).",
+        )
+
+    # Validate that each part looks like a plausible route ID.
+    for part in parts:
+        if not _batch_routeid_pattern.fullmatch(part):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid route ID: {part!r}",
+            )
+
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    unique_parts: list[str] = []
+    for part in parts:
+        if part not in seen:
+            seen.add(part)
+            unique_parts.append(part)
+
+    service = request.app.state.realtime_service
+    try:
+        batch = service.get_batch_snapshots(unique_parts)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="TDX upstream request failed.") from exc
+
+    return {"routes": batch}
 
 
 @router.get("/api/v1/routes/{routeid}/realtime")
