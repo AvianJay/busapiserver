@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+import os
 import threading
 import time
 
@@ -136,6 +138,19 @@ async def lifespan(app: FastAPI):
         name="weekly-static-sync",
     )
 
+    tunnel = None
+    tunnel_token = os.getenv("CLOUDFLARED_TUNNEL_TOKEN")
+    if tunnel_token:
+        try:
+            from pycloudflared import Tunnel
+            LOGGER.info("Starting Cloudflare tunnel...")
+            tunnel = Tunnel(token=tunnel_token)
+            await asyncio.to_thread(tunnel.start, timeout=60)
+            LOGGER.info("Cloudflare tunnel started successfully")
+        except Exception as exc:
+            LOGGER.exception("Failed to start Cloudflare tunnel: %s", exc)
+            tunnel = None
+
     app.state.settings = settings
     app.state.log_dir = log_dir
     app.state.token_manager = token_manager
@@ -144,6 +159,7 @@ async def lifespan(app: FastAPI):
     app.state.route_buses_service = route_buses_service
     app.state.scheduler_stop_event = scheduler_stop_event
     app.state.scheduler_thread = scheduler_thread
+    app.state.tunnel = tunnel
 
     scheduler_thread.start()
 
@@ -154,6 +170,12 @@ async def lifespan(app: FastAPI):
         scheduler_thread.join(timeout=5)
         tdx_client.close()
         token_manager.close()
+        if tunnel is not None:
+            try:
+                tunnel.stop()
+                LOGGER.info("Cloudflare tunnel stopped")
+            except Exception as exc:
+                LOGGER.exception("Failed to stop Cloudflare tunnel: %s", exc)
         shutdown_logging()
 
 
