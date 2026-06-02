@@ -11,7 +11,7 @@ from app.auth_service import AuthPrincipal, authenticate_token
 from app.config import get_settings
 
 
-RATE_LIMIT_REQUESTS = 30
+RATE_LIMIT_REQUESTS = 60
 RATE_LIMIT_WINDOW_SECONDS = 60
 AUTH_TOKEN_COOKIE_NAME = "yabus_auth_token"
 
