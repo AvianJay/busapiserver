@@ -365,6 +365,19 @@
       return node.innerHTML;
     }
 
+    // Escapes a value for safe interpolation inside a double-quoted HTML
+    // attribute. escapeHtml() alone is NOT safe for attributes because it does
+    // not encode quotes, which would let user-controlled values (e.g. parsed
+    // from the User-Agent) break out of the attribute and inject handlers.
+    function escapeAttr(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
     function formatTime(timestamp) {
       if (!timestamp) return "未記錄";
       return new Date(timestamp * 1000).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
@@ -450,8 +463,8 @@
               </div>
             </div>
             <div class="feedback-tags">
-              <md-filter-chip label="${escapeHtml((entry.account_role || 'user').toLowerCase())}" selected style="--md-filter-chip-selected-container-color: var(--md-sys-color-primary-container); --md-filter-chip-selected-label-text-color: var(--md-sys-color-on-primary-container);"></md-filter-chip>
-              <md-filter-chip label="${escapeHtml(clientLabel(entry))}"></md-filter-chip>
+              <md-filter-chip label="${escapeAttr((entry.account_role || 'user').toLowerCase())}" selected style="--md-filter-chip-selected-container-color: var(--md-sys-color-primary-container); --md-filter-chip-selected-label-text-color: var(--md-sys-color-on-primary-container);"></md-filter-chip>
+              <md-filter-chip label="${escapeAttr(clientLabel(entry))}"></md-filter-chip>
             </div>
           </div>
           

@@ -348,6 +348,15 @@
     function escapeHtml(s) {
       const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML;
     }
+    // Safe for values placed inside double-quoted HTML attributes (escapes quotes).
+    function escapeAttr(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
     function fmtTime(ts) {
       if (!ts) return "—";
       return new Date(ts * 1000).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
@@ -399,10 +408,10 @@
       const parts = [];
       const t = ann.targets;
       if (t && t.platforms && t.platforms.length) {
-        parts.push(...t.platforms.map(p => `<md-filter-chip label="${escapeHtml(p)}"></md-filter-chip>`));
+        parts.push(...t.platforms.map(p => `<md-filter-chip label="${escapeAttr(p)}"></md-filter-chip>`));
       }
       if (t && t.version_constraint) {
-        parts.push(`<md-filter-chip label="${escapeHtml(t.version_constraint)}"></md-filter-chip>`);
+        parts.push(`<md-filter-chip label="${escapeAttr(t.version_constraint)}"></md-filter-chip>`);
       }
       return parts.join("");
     }
@@ -412,7 +421,7 @@
       document.getElementById("countLabel").textContent = `共 ${announcements.length} 則`;
       if (!announcements.length) { root.innerHTML = '<div class="empty">目前沒有任何公告。</div>'; return; }
       root.innerHTML = announcements.map(a => `
-        <article class="m3-card card" data-id="${escapeHtml(a.id)}" style="cursor: pointer; background-color: var(--md-sys-color-surface-container-high);">
+        <article class="m3-card card" data-id="${escapeAttr(a.id)}" style="cursor: pointer; background-color: var(--md-sys-color-surface-container-high);">
           <div class="card-head" style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
             <h3 class="md-typescale-title-medium" style="font-weight: 700; margin: 0;">${escapeHtml(a.title)}</h3>
             <div class="card-meta" style="display: flex; gap: 8px; align-items: center;">${statusPill(a)}${targetsPills(a)}</div>

@@ -400,6 +400,16 @@
       return div.innerHTML;
     }
 
+    // Safe for values placed inside double-quoted HTML attributes (escapes quotes).
+    function escapeAttr(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
     function formatTime(value) {
       if (!value) {
         return "未記錄";
@@ -517,18 +527,18 @@
             <div class="user-head">
               <div>
                 <div class="pill-row" style="margin-bottom: 6px;">
-                  <md-filter-chip label="${escapeHtml(role)}" selected style="--md-filter-chip-selected-container-color: var(--md-sys-color-primary-container); --md-filter-chip-selected-label-text-color: var(--md-sys-color-on-primary-container);"></md-filter-chip>
+                  <md-filter-chip label="${escapeAttr(role)}" selected style="--md-filter-chip-selected-container-color: var(--md-sys-color-primary-container); --md-filter-chip-selected-label-text-color: var(--md-sys-color-on-primary-container);"></md-filter-chip>
                   <span class="mono" style="font-weight: 700;">ID: ${escapeHtml(account.account_id)}</span>
                 </div>
               </div>
               <div class="user-actions">
-                <md-outlined-select style="min-width: 120px;" data-role-select="${escapeHtml(account.account_id)}" ${busy ? "disabled" : ""}>
+                <md-outlined-select style="min-width: 120px;" data-role-select="${escapeAttr(account.account_id)}" ${busy ? "disabled" : ""}>
                   <md-select-option value="admin" ${account.role === "admin" ? "selected" : ""}>admin</md-select-option>
                   <md-select-option value="mod" ${account.role === "mod" ? "selected" : ""}>mod</md-select-option>
                   <md-select-option value="user" ${account.role === "user" ? "selected" : ""}>user</md-select-option>
                 </md-outlined-select>
-                <md-filled-button type="button" data-role-save="${escapeHtml(account.account_id)}" ${busy ? "disabled" : ""}>更新角色</md-filled-button>
-                <md-outlined-button type="button" data-logout-all="${escapeHtml(account.account_id)}" ${busy ? "disabled" : ""} style="--md-outlined-button-outline-color: var(--md-sys-color-error); --md-outlined-button-label-text-color: var(--md-sys-color-error);">
+                <md-filled-button type="button" data-role-save="${escapeAttr(account.account_id)}" ${busy ? "disabled" : ""}>更新角色</md-filled-button>
+                <md-outlined-button type="button" data-logout-all="${escapeAttr(account.account_id)}" ${busy ? "disabled" : ""} style="--md-outlined-button-outline-color: var(--md-sys-color-error); --md-outlined-button-label-text-color: var(--md-sys-color-error);">
                   登出全部裝置
                 </md-outlined-button>
               </div>
