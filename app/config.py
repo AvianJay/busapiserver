@@ -148,6 +148,14 @@ class Settings:
     account_sync_max_favorites: int = 25
     account_sync_max_group_name_length: int = 120
     account_sync_max_json_depth: int = 16
+    # Application database (auth, analytics, announcements, feedback, account
+    # sync). Independent of the static route database so the weekly static sync
+    # never touches it. When not provided, it defaults to "app.db" next to db_path.
+    app_db_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.app_db_path is None:
+            object.__setattr__(self, "app_db_path", self.db_path.parent / "app.db")
 
     def city_db_path(self, city: str) -> Path:
         return self.download_db_path.parent / f"{city}.db"
@@ -160,10 +168,14 @@ class Settings:
         download_db_path = Path(
             os.getenv("BUS_DOWNLOAD_DB_PATH", project_dir / "downloads" / "bus.db")
         ).resolve()
+        app_db_path = Path(
+            os.getenv("BUS_APP_DB_PATH", db_path.parent / "app.db")
+        ).resolve()
         return cls(
             project_dir=project_dir,
             db_path=db_path,
             download_db_path=download_db_path,
+            app_db_path=app_db_path,
             tdx_client_id=os.getenv("TDX_CLIENT_ID"),
             tdx_client_secret=os.getenv("TDX_CLIENT_SECRET"),
             tdx_base_url=os.getenv("TDX_BASE_URL", DEFAULT_TDX_BASE_URL).rstrip("/"),

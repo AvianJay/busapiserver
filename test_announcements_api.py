@@ -17,7 +17,7 @@ from app.api.announcements import (
 )
 from app.auth_service import AuthPrincipal
 from app.config import Settings
-from app.db import init_db
+from app.db import init_app_db, init_db
 from app.main import app
 
 
@@ -62,6 +62,7 @@ class AnnouncementsApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
         init_db(self.db_path)
+        init_app_db(self.db_path.parent / "app.db")
         self.settings = _settings(self.db_path)
         self._original_get_request_principal = announcements_api.get_request_principal
         self._original_send_announcement_push = announcements_api.send_announcement_push

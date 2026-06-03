@@ -25,7 +25,13 @@ from app.api.metro import router as metro_router
 from app.api.rail import router as rail_router
 from app.api.bike import router as bike_router
 from app.config import get_settings
-from app.db import export_download_db, init_db, refresh_database_versions
+from app.db import (
+    export_download_db,
+    init_app_db,
+    init_db,
+    migrate_app_tables_from_main,
+    refresh_database_versions,
+)
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.request_analytics import record_request_analytics, should_record_analytics
 from app.sync_realtime import RealtimeService, RouteBusesService
@@ -93,7 +99,7 @@ def _record_request_analytics_safe(request: Request, path: str, status_code: int
 
     try:
         record_request_analytics(
-            settings.db_path,
+            settings.app_db_path,
             method=request.method,
             endpoint=endpoint,
             path=path,
@@ -115,6 +121,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     log_dir = setup_logging(settings.project_dir)
     init_db(settings.db_path)
+    init_app_db(settings.app_db_path)
+    # One-time migration for deployments that stored application data in the
+    # static database. Moves auth/analytics/announcement/feedback/sync rows into
+    # the dedicated application database and drops the legacy tables.
+    if migrate_app_tables_from_main(settings.db_path, settings.app_db_path):
+        LOGGER.info("migrated legacy application tables into app db")
     export_download_db(settings.db_path, settings.download_db_path)
     refresh_database_versions(
         settings.db_path,

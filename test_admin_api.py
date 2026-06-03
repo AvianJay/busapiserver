@@ -13,7 +13,7 @@ from app.api import admin as admin_api
 from app.api import analytics as analytics_api
 from app.auth_service import AuthPrincipal, OAuthIdentity, _upsert_login, authenticate_token
 from app.config import Settings
-from app.db import get_connection, init_db
+from app.db import get_connection, init_app_db, init_db
 from app.main import app
 
 
@@ -58,6 +58,8 @@ class AdminApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
         init_db(self.db_path)
+        self.app_db_path = self.db_path.parent / "app.db"
+        init_app_db(self.app_db_path)
         self.settings = _settings(self.db_path)
         self._original_admin_get_request_principal = admin_api.get_request_principal
         self._original_analytics_get_request_principal = analytics_api.get_request_principal
@@ -137,7 +139,7 @@ class AdminApiTests(unittest.TestCase):
             device_key=str(uuid4()),
             redirect_uri="https://bus.example.test/account",
         )
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             connection.execute(
                 "UPDATE accounts SET role = 'admin' WHERE id = ?",
                 (admin_login.account_id,),

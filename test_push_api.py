@@ -11,7 +11,7 @@ from app.api.push import (
     register_push_token,
 )
 from app.config import Settings
-from app.db import get_connection, init_db
+from app.db import get_connection, init_app_db, init_db
 from app.main import app
 
 
@@ -57,6 +57,8 @@ class PushApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
         init_db(self.db_path)
+        self.app_db_path = self.db_path.parent / "app.db"
+        init_app_db(self.app_db_path)
         self.settings = _settings(self.db_path)
 
     def tearDown(self) -> None:
@@ -85,7 +87,7 @@ class PushApiTests(unittest.TestCase):
             PushTokenRegisterRequest(token="abc", platform="android"),
         )
 
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             rows = connection.execute(
                 """
                 SELECT token, platform, user_agent

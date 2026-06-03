@@ -37,7 +37,7 @@ def register_push_token(
 ) -> dict[str, bool]:
     try:
         register_announcement_push_token(
-            request.app.state.settings.db_path,
+            request.app.state.settings.app_db_path,
             token=payload.token,
             platform=payload.platform,
             user_agent=request.headers.get("user-agent"),

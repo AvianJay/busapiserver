@@ -216,7 +216,7 @@ def announcements_page(request: Request) -> FileResponse | RedirectResponse:
 def list_all_announcements(request: Request) -> list[dict[str, Any]]:
     """Return ALL announcements including expired (mod/admin only)."""
     _require_editor(request)
-    with get_connection(request.app.state.settings.db_path) as connection:
+    with get_connection(request.app.state.settings.app_db_path) as connection:
         rows = connection.execute(
             """
             SELECT
@@ -242,7 +242,7 @@ def list_announcements(
         version=version,
     )
     now = int(time.time())
-    with get_connection(request.app.state.settings.db_path) as connection:
+    with get_connection(request.app.state.settings.app_db_path) as connection:
         rows = connection.execute(
             """
             SELECT
@@ -303,7 +303,7 @@ def create_announcement(
     }
     _validate_announcement_payload(announcement)
 
-    with get_connection(request.app.state.settings.db_path) as connection:
+    with get_connection(request.app.state.settings.app_db_path) as connection:
         existing = connection.execute(
             "SELECT 1 FROM announcements WHERE id = ?",
             (announcement["id"],),
@@ -330,7 +330,7 @@ def update_announcement(
 ) -> dict[str, Any]:
     _require_editor(request)
     now = int(time.time())
-    with get_connection(request.app.state.settings.db_path) as connection:
+    with get_connection(request.app.state.settings.app_db_path) as connection:
         row = connection.execute(
             """
             SELECT

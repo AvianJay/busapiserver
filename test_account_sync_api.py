@@ -13,7 +13,7 @@ from fastapi import HTTPException, Response
 from app.api import account_sync as account_sync_api
 from app.auth_service import AuthPrincipal, OAuthIdentity, _upsert_login
 from app.config import Settings
-from app.db import get_connection, init_db
+from app.db import get_connection, init_app_db, init_db
 from app.main import app
 
 
@@ -72,7 +72,9 @@ class AccountSyncApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
+        self.app_db_path = self.db_path.parent / "app.db"
         init_db(self.db_path)
+        init_app_db(self.app_db_path)
         self.settings = _settings(self.db_path)
         self._original_get_request_principal = account_sync_api.get_request_principal
 
@@ -205,7 +207,7 @@ class AccountSyncApiTests(unittest.TestCase):
         self.assertIn("Last-Modified", response.headers)
         self.assertEqual(response.headers["X-YABUS-Sync-Revision"], "1")
 
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             row = connection.execute(
                 """
                 SELECT namespace, schema_version, revision, payload_size_bytes

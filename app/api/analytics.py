@@ -18,7 +18,7 @@ def get_analytics(
 ) -> dict[str, object]:
     _require_admin(request)
     settings = request.app.state.settings
-    return build_analytics_report(settings.db_path, days=days, limit=limit)
+    return build_analytics_report(settings.app_db_path, days=days, limit=limit)
 
 
 @router.get("/api/v1/analytics", include_in_schema=False)

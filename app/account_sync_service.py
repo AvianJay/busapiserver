@@ -102,7 +102,7 @@ def get_sync_document(
     account_id: int,
     namespace: SyncNamespace,
 ) -> SyncDocument | None:
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         return _load_sync_document(connection, account_id=account_id, namespace=namespace)
 
 
@@ -112,7 +112,7 @@ def list_sync_documents(
     account_id: int,
     namespaces: tuple[SyncNamespace, ...] = SUPPORTED_SYNC_NAMESPACES,
 ) -> dict[str, SyncDocument | None]:
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         rows = connection.execute(
             """
             SELECT
@@ -174,7 +174,7 @@ def upsert_sync_document(
     now = int(time.time()) if synced_at is None else int(synced_at)
     content_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         current = _load_sync_document(connection, account_id=account_id, namespace=namespace)
         base_provided = base_revision is not None or _normalize_optional_text(base_etag) is not None
 

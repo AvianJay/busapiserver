@@ -102,7 +102,7 @@ def send_announcement_push(
             "reason": "FCM service account credentials are not configured.",
         }
 
-    tokens = _load_push_tokens(settings.db_path, platforms=push_platforms)
+    tokens = _load_push_tokens(settings.app_db_path, platforms=push_platforms)
     if not tokens:
         return {
             "attempted": True,
@@ -174,7 +174,7 @@ def send_announcement_push(
             invalid_tokens.append(entry["token"])
 
     if invalid_tokens:
-        _delete_push_tokens(settings.db_path, invalid_tokens)
+        _delete_push_tokens(settings.app_db_path, invalid_tokens)
 
     result: dict[str, Any] = {
         "attempted": True,

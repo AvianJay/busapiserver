@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from app.api import feedback as feedback_api
 from app.auth_service import AuthPrincipal, OAuthIdentity, _upsert_login
 from app.config import Settings
-from app.db import get_connection, init_db
+from app.db import get_connection, init_app_db, init_db
 from app.main import app
 from app.rate_limit import reset_rate_limit_state
 
@@ -58,6 +58,8 @@ class FeedbackApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
         init_db(self.db_path)
+        self.app_db_path = self.db_path.parent / "app.db"
+        init_app_db(self.app_db_path)
         self.settings = _settings(self.db_path)
         self._original_get_request_principal = feedback_api.get_request_principal
         reset_rate_limit_state()
@@ -121,7 +123,7 @@ class FeedbackApiTests(unittest.TestCase):
         )
 
         self.assertTrue(created["ok"])
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             row = connection.execute(
                 """
                 SELECT account_id, title, content, client_family, platform_name, app_version
@@ -184,7 +186,7 @@ class FeedbackApiTests(unittest.TestCase):
             device_key=str(uuid4()),
             redirect_uri="https://bus.example.test/account",
         )
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             connection.execute(
                 "UPDATE accounts SET role = 'admin' WHERE id = ?",
                 (admin_login.account_id,),

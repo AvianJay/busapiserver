@@ -65,7 +65,7 @@ def create_feedback(request: Request, payload: FeedbackCreateRequest) -> dict[st
     parsed_user_agent = parse_user_agent(user_agent)
     safe_user_agent = user_agent[:MAX_USER_AGENT_LENGTH]
 
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         connection.execute(
             """
             INSERT INTO feedbacks (
@@ -120,7 +120,7 @@ def list_feedbacks(
     _require_admin(request)
 
     now = int(time.time())
-    with get_connection(request.app.state.settings.db_path) as connection:
+    with get_connection(request.app.state.settings.app_db_path) as connection:
         summary_row = connection.execute(
             """
             SELECT

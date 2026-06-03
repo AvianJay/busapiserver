@@ -27,7 +27,7 @@ from app.auth_service import (
     update_account_role,
 )
 from app.config import Settings
-from app.db import get_connection, init_db
+from app.db import get_connection, init_app_db, init_db
 
 
 def _settings(db_path: Path) -> Settings:
@@ -64,6 +64,8 @@ class AuthServiceTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
         init_db(self.db_path)
+        self.app_db_path = self.db_path.parent / "app.db"
+        init_app_db(self.app_db_path)
         self.settings = _settings(self.db_path)
 
     def tearDown(self) -> None:
@@ -297,7 +299,7 @@ class AuthServiceTests(unittest.TestCase):
         payload = account_payload(self.settings, target_principal)
         self.assertEqual({row["provider"] for row in payload["identities"]}, {"google", "discord"})
 
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             deleted_account = connection.execute(
                 "SELECT 1 FROM accounts WHERE id = ?",
                 (source_login.account_id,),
@@ -406,7 +408,7 @@ class AuthServiceTests(unittest.TestCase):
             redirect_uri="https://bus.example.test/account",
         )
 
-        with get_connection(self.db_path) as connection:
+        with get_connection(self.app_db_path) as connection:
             connection.execute(
                 "UPDATE accounts SET role = 'admin' WHERE id = ?",
                 (admin_login.account_id,),

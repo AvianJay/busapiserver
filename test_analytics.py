@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
-from app.db import init_db
+from app.db import init_app_db, init_db
 from app.request_analytics import (
     build_analytics_report,
     parse_user_agent,
@@ -18,7 +18,9 @@ class AnalyticsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
+        self.app_db_path = self.db_path.parent / "app.db"
         init_db(self.db_path)
+        init_app_db(self.app_db_path)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -51,7 +53,7 @@ class AnalyticsTests(unittest.TestCase):
         ten_days_ago = now - (10 * 86400)
 
         record_request_analytics(
-            self.db_path,
+            self.app_db_path,
             method="GET",
             endpoint="/api/v1/routes/{routeid}/realtime",
             path="/api/v1/routes/TPE307/realtime",
@@ -60,7 +62,7 @@ class AnalyticsTests(unittest.TestCase):
             requested_at=now,
         )
         record_request_analytics(
-            self.db_path,
+            self.app_db_path,
             method="GET",
             endpoint="/api/v1/routes/{routeid}/realtime",
             path="/api/v1/routes/TPE307/realtime",
@@ -73,7 +75,7 @@ class AnalyticsTests(unittest.TestCase):
             requested_at=now,
         )
         record_request_analytics(
-            self.db_path,
+            self.app_db_path,
             method="GET",
             endpoint="/api/v1/routes/{routeid}/stops",
             path="/api/v1/routes/TPE307/stops",
@@ -82,8 +84,8 @@ class AnalyticsTests(unittest.TestCase):
             requested_at=ten_days_ago,
         )
 
-        recent_report = build_analytics_report(self.db_path, days=7, limit=20)
-        all_time_report = build_analytics_report(self.db_path, days=0, limit=20)
+        recent_report = build_analytics_report(self.app_db_path, days=7, limit=20)
+        all_time_report = build_analytics_report(self.app_db_path, days=0, limit=20)
 
         self.assertEqual(recent_report["summary"]["total_requests"], 2)
         self.assertEqual(all_time_report["summary"]["total_requests"], 3)

@@ -353,7 +353,7 @@ def create_oauth_state(
 ) -> str:
     now = int(time.time())
     state = secrets.token_urlsafe(32)
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         connection.execute(
             """
             INSERT INTO auth_oauth_states
@@ -385,7 +385,7 @@ def create_link_oauth_state_context(
     target_account_id: int,
 ) -> None:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         connection.execute(
             """
             INSERT INTO auth_link_state_contexts
@@ -417,7 +417,7 @@ def consume_oauth_state(
     state: str,
 ) -> OAuthState:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -459,7 +459,7 @@ def _consume_link_oauth_state_context(
     state: str,
 ) -> int | None:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         row = connection.execute(
             """
             SELECT target_account_id, expires_at
@@ -773,7 +773,7 @@ def _upsert_login(
 ) -> AuthLoginResult:
     now = int(time.time())
     safe_device_name = (device_name or "").strip()[:200] or None
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
             identity_row = connection.execute(
@@ -883,7 +883,7 @@ def link_oauth_identity(
     redirect_uri: str,
 ) -> AuthLinkResult:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
             target_row = connection.execute(
@@ -975,7 +975,7 @@ def get_pending_account_merge(
         merge_token=merge_token,
     )
     source_account_id = int(row["source_account_id"])
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         identity_rows = connection.execute(
             """
             SELECT provider, email, display_name
@@ -1025,7 +1025,7 @@ def confirm_account_merge(
     merge_token: str,
 ) -> AuthLinkResult:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = _get_pending_account_merge_row(
@@ -1143,7 +1143,7 @@ def authenticate_token(settings: Settings, token: str) -> AuthPrincipal | None:
     if not cleaned:
         return None
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         row = connection.execute(
             """
             SELECT
@@ -1185,7 +1185,7 @@ def authenticate_token(settings: Settings, token: str) -> AuthPrincipal | None:
 
 def revoke_token(settings: Settings, principal: AuthPrincipal) -> None:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         connection.execute(
             """
             UPDATE account_device_tokens
@@ -1199,7 +1199,7 @@ def revoke_token(settings: Settings, principal: AuthPrincipal) -> None:
 
 def revoke_all_tokens(settings: Settings, principal: AuthPrincipal) -> None:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         connection.execute(
             """
             UPDATE account_device_tokens
@@ -1212,7 +1212,7 @@ def revoke_all_tokens(settings: Settings, principal: AuthPrincipal) -> None:
 
 
 def get_device_key(settings: Settings, device_id: int) -> str:
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         row = connection.execute(
             "SELECT device_key FROM account_devices WHERE id = ?",
             (device_id,),
@@ -1223,7 +1223,7 @@ def get_device_key(settings: Settings, device_id: int) -> str:
 
 
 def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, Any]:
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         account_row = connection.execute(
             "SELECT created_at, updated_at FROM accounts WHERE id = ?",
             (principal.account_id,),
@@ -1271,7 +1271,7 @@ def account_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, A
 
 
 def account_devices_payload(settings: Settings, principal: AuthPrincipal) -> dict[str, Any]:
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         device_rows = connection.execute(
             """
             SELECT
@@ -1314,7 +1314,7 @@ def account_devices_payload(settings: Settings, principal: AuthPrincipal) -> dic
 
 
 def admin_accounts_payload(settings: Settings) -> dict[str, Any]:
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         accounts = _load_admin_account_rows(connection)
 
     summary = {
@@ -1338,7 +1338,7 @@ def update_account_role(
 ) -> dict[str, Any]:
     normalized_role = validate_role(role)
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
             current_row = connection.execute(
@@ -1381,7 +1381,7 @@ def revoke_account_tokens(
     account_id: int,
 ) -> int:
     now = int(time.time())
-    with get_connection(settings.db_path) as connection:
+    with get_connection(settings.app_db_path) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -1486,7 +1486,7 @@ def _get_pending_account_merge_row(
     now = int(time.time())
     owns_connection = connection is None
     if connection is None:
-        context = get_connection(settings.db_path)
+        context = get_connection(settings.app_db_path)
         connection = context.__enter__()
     try:
         row = connection.execute(

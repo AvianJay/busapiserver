@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from app.api import auth as auth_api
 from app.auth_service import AuthPrincipal
 from app.config import Settings
-from app.db import init_db
+from app.db import init_app_db, init_db
 
 
 def _settings(db_path: Path) -> Settings:
@@ -54,6 +54,7 @@ class AuthApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
         init_db(self.db_path)
+        init_app_db(self.db_path.parent / "app.db")
         self.settings = _settings(self.db_path)
         self._original_get_request_principal = auth_api.get_request_principal
 

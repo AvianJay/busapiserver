@@ -106,6 +106,14 @@ CREATE TABLE IF NOT EXISTS database_versions (
     content_hash TEXT NOT NULL,
     updated_at   INTEGER NOT NULL
 );
+"""
+
+# Application data unrelated to static route sync. These tables live in a
+# separate database file (app.db) so that the weekly static sync, which
+# atomically replaces the static database, never touches user/auth/analytics
+# data and cannot race with concurrent API writes.
+APP_SCHEMA_SQL = """
+PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS request_analytics (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -389,8 +397,99 @@ def init_db(db_path: str | Path) -> None:
     with get_connection(db_path) as connection:
         _drop_legacy_inter_tables(connection)
         connection.executescript(MAIN_SCHEMA_SQL)
+        connection.commit()
+
+
+def init_app_db(db_path: str | Path) -> None:
+    """Initialize the application database (auth, analytics, announcements, etc.).
+
+    This database is independent of the static route database and is never
+    replaced by the weekly static sync.
+    """
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    with get_connection(db_path) as connection:
+        connection.executescript(APP_SCHEMA_SQL)
         _migrate_account_devices_add_device_name(connection)
         connection.commit()
+
+
+# Tables that hold application data (auth, analytics, announcements, feedback,
+# account sync). These live in the application database, separate from the
+# static route database. Order matters for FK-safe inserts (parents first).
+APP_TABLES = (
+    "accounts",
+    "account_oauth_identities",
+    "account_devices",
+    "account_device_tokens",
+    "auth_oauth_states",
+    "auth_link_state_contexts",
+    "auth_pending_account_merges",
+    "request_analytics",
+    "announcements",
+    "announcement_push_tokens",
+    "feedbacks",
+    "account_sync_documents",
+)
+
+
+def migrate_app_tables_from_main(main_db_path: str | Path, app_db_path: str | Path) -> bool:
+    """One-time migration: move legacy application data out of the static db.
+
+    Older deployments stored auth/analytics/announcement/feedback/sync tables in
+    the main (static) database. This copies any such rows into the dedicated
+    application database when the application database does not yet contain them,
+    then drops the legacy tables from the main database so the static sync no
+    longer carries them.
+
+    Returns True if any data was migrated.
+    """
+    main_path = Path(main_db_path)
+    if not main_path.exists():
+        return False
+
+    migrated_any = False
+    with get_connection(main_path) as main_conn, get_connection(app_db_path) as app_conn:
+        for table in APP_TABLES:
+            legacy_exists = main_conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if legacy_exists is None:
+                continue
+
+            rows = main_conn.execute(f"SELECT * FROM {table}").fetchall()
+            if not rows:
+                continue
+
+            # Only seed the app db when its table is currently empty, to
+            # avoid clobbering newer data already written to the app db.
+            app_count = app_conn.execute(
+                f"SELECT COUNT(*) AS c FROM {table}"
+            ).fetchone()["c"]
+            if app_count == 0:
+                column_names = [col["name"] for col in main_conn.execute(
+                    f"PRAGMA table_info({table})"
+                ).fetchall()]
+                cols_csv = ", ".join(column_names)
+                placeholders = ", ".join("?" for _ in column_names)
+                app_conn.executemany(
+                    f"INSERT OR IGNORE INTO {table} ({cols_csv}) VALUES ({placeholders})",
+                    [tuple(row) for row in rows],
+                )
+                migrated_any = True
+
+        app_conn.commit()
+
+        # Drop legacy application tables from the static database so the weekly
+        # static sync stops carrying stale data. Disable FK enforcement and drop
+        # in reverse (child-first) order to avoid constraint violations.
+        main_conn.execute("PRAGMA foreign_keys = OFF;")
+        for table in reversed(APP_TABLES):
+            main_conn.execute(f"DROP TABLE IF EXISTS {table}")
+        main_conn.execute("PRAGMA foreign_keys = ON;")
+        main_conn.commit()
+
+    return migrated_any
 
 
 def _migrate_account_devices_add_device_name(connection: sqlite3.Connection) -> None:
