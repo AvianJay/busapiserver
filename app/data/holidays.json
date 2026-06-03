@@ -1,7 +1,7 @@
 {
-  "source": "Taiwan government calendar (manually maintained)",
+  "source": "Offline fallback only. Primary source is ruyut/TaiwanCalendar fetched at runtime.",
   "updated": "2026-06-03",
-  "note": "isHoliday=true means a non-working day (national holiday / weekend off). isHoliday=false on a weekend date means it is a make-up working day (補班). Dates without an entry follow the normal weekend rule (Sat/Sun = holiday).",
+  "note": "This file is ONLY used as a fallback when the TaiwanCalendar open data cannot be fetched. Normally the API fetches https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json which is updated yearly. isHoliday=false on a weekend date = make-up working day (補班).",
   "holidays": {
     "2025": [
       { "date": "2025-01-01", "name": "中華民國開國紀念日", "isHoliday": true },

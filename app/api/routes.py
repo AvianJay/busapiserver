@@ -748,31 +748,128 @@ def get_route_schedule(routeid: str, request: Request) -> list[dict]:
 # Taiwan holiday calendar
 # ---------------------------------------------------------------------------
 
-import json as _holiday_json
-from functools import lru_cache
 from pathlib import Path as _Path
 
-_HOLIDAYS_FILE = _Path(__file__).resolve().parent.parent / "data" / "holidays.json"
+# Source: ruyut/TaiwanCalendar open data (updated every year, includes
+# make-up working days / 補班 and adjusted long weekends). Served via jsDelivr
+# CDN for reliability. Each year is a list of daily objects:
+#   {"date": "YYYYMMDD", "week": "一", "isHoliday": bool, "description": str}
+_TAIWAN_CALENDAR_URL = (
+    "https://cdn.jsdelivr.net/gh/ruyut/TaiwanCalendar/data/{year}.json"
+)
+_TAIWAN_CALENDAR_FALLBACK_URL = (
+    "https://raw.githubusercontent.com/ruyut/TaiwanCalendar/master/data/{year}.json"
+)
+_HOLIDAYS_LOCAL_FILE = _Path(__file__).resolve().parent.parent / "data" / "holidays.json"
+
+HOLIDAYS_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 
 
-@lru_cache(maxsize=1)
-def _load_holidays_data() -> dict:
-    """Loads and caches the bundled Taiwan holiday calendar JSON.
+@dataclass
+class _HolidayCacheEntry:
+    # date string "YYYY-MM-DD" -> {"isHoliday": bool, "name": str | None}
+    entries: dict[str, dict]
+    fetched_at: float = field(default_factory=time.monotonic)
 
-    The file is manually maintained (see app/data/holidays.json). Returns an
-    empty structure if the file is missing or invalid so the endpoint never
-    crashes.
+    @property
+    def is_fresh(self) -> bool:
+        return (time.monotonic() - self.fetched_at) < HOLIDAYS_CACHE_TTL_SECONDS
+
+
+_holidays_cache: dict[int, _HolidayCacheEntry] = {}
+_holidays_lock = threading.Lock()
+
+
+def _parse_taiwan_calendar(raw: list) -> dict[str, dict]:
+    """Converts the TaiwanCalendar daily list into a date->info map.
+
+    Only keeps days where ``isHoliday`` is True OR a make-up working day
+    (a weekend date marked isHoliday=False), which is all the schedule logic
+    needs. Plain weekdays follow the default weekend rule on the client side.
     """
+    import json as _json
+
+    result: dict[str, dict] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        raw_date = str(item.get("date", "")).strip()
+        if len(raw_date) != 8 or not raw_date.isdigit():
+            continue
+        iso = f"{raw_date[0:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+        try:
+            parsed = datetime.strptime(iso, "%Y-%m-%d")
+        except ValueError:
+            continue
+        is_holiday = bool(item.get("isHoliday", False))
+        is_weekend = parsed.weekday() >= 5
+        # Keep holidays, and make-up working days (weekend but not a holiday).
+        if is_holiday or (is_weekend and not is_holiday):
+            name = item.get("description") or None
+            result[iso] = {"isHoliday": is_holiday, "name": name}
+    return result
+
+
+def _fetch_taiwan_calendar(year: int) -> dict[str, dict] | None:
+    """Fetches a year's calendar from the CDN (falling back to GitHub raw)."""
+    for url_template in (_TAIWAN_CALENDAR_URL, _TAIWAN_CALENDAR_FALLBACK_URL):
+        url = url_template.format(year=year)
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code != 200:
+                continue
+            return _parse_taiwan_calendar(response.json())
+        except Exception as exc:  # pragma: no cover - network dependent
+            LOGGER.warning("failed to fetch Taiwan calendar %s from %s: %s", year, url, exc)
+    return None
+
+
+def _load_local_holidays() -> dict[str, dict[str, dict]]:
+    """Loads the bundled fallback holiday file (year -> date -> info)."""
+    import json as _json
+
     try:
-        with _HOLIDAYS_FILE.open("r", encoding="utf-8") as handle:
-            data = _holiday_json.load(handle)
-        if isinstance(data, dict) and isinstance(data.get("holidays"), dict):
-            return data
+        with _HOLIDAYS_LOCAL_FILE.open("r", encoding="utf-8") as handle:
+            data = _json.load(handle)
     except FileNotFoundError:
-        LOGGER.warning("holidays.json not found at %s", _HOLIDAYS_FILE)
+        return {}
     except Exception as exc:  # pragma: no cover - defensive
-        LOGGER.exception("failed to load holidays.json: %s", exc)
-    return {"holidays": {}}
+        LOGGER.exception("failed to load local holidays.json: %s", exc)
+        return {}
+
+    out: dict[str, dict[str, dict]] = {}
+    for year_key, items in (data.get("holidays") or {}).items():
+        year_map: dict[str, dict] = {}
+        for item in items:
+            if isinstance(item, dict) and item.get("date"):
+                year_map[item["date"]] = {
+                    "isHoliday": bool(item.get("isHoliday", True)),
+                    "name": item.get("name"),
+                }
+        out[str(year_key)] = year_map
+    return out
+
+
+def _get_holidays_for_year(year: int) -> dict[str, dict]:
+    """Returns a cached date->info map for ``year``.
+
+    Tries the remote TaiwanCalendar first, then falls back to the bundled
+    local file, then to an empty map (client uses the weekend rule).
+    """
+    cached = _holidays_cache.get(year)
+    if cached is not None and cached.is_fresh:
+        return cached.entries
+
+    with _holidays_lock:
+        cached = _holidays_cache.get(year)
+        if cached is not None and cached.is_fresh:
+            return cached.entries
+
+        entries = _fetch_taiwan_calendar(year)
+        if entries is None:
+            entries = _load_local_holidays().get(str(year), {})
+        _holidays_cache[year] = _HolidayCacheEntry(entries=entries)
+        return entries
 
 
 @router.get("/api/v1/holidays")
@@ -783,51 +880,36 @@ def get_holidays(
         default=None, description="Filter by a single date in YYYY-MM-DD"
     ),
 ) -> dict:
-    """Returns the Taiwan national holiday calendar.
+    """Returns the Taiwan national holiday calendar (from open data).
 
-    - No params: returns all known holiday entries grouped by year.
-    - ?year=2026: returns only that year's entries.
-    - ?date=2026-02-18: returns a single object describing whether the date is
-      a holiday (or make-up working day). Dates without an explicit entry fall
-      back to the weekend rule (Sat/Sun = holiday).
+    - ?year=2026: returns that year's holiday/make-up entries as a list.
+    - ?date=2026-02-18: returns ``{date, isHoliday, name}``; dates without an
+      explicit entry fall back to the weekend rule (Sat/Sun = holiday).
+    - No params: defaults to the current year (avoids fetching many years).
     """
-    data = _load_holidays_data()
-    holidays_by_year: dict = data.get("holidays", {})
-
     if date is not None:
         try:
             parsed = datetime.strptime(date.strip(), "%Y-%m-%d").date()
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid date format, expected YYYY-MM-DD")
-        year_key = str(parsed.year)
-        entry = None
-        for item in holidays_by_year.get(year_key, []):
-            if isinstance(item, dict) and item.get("date") == parsed.isoformat():
-                entry = item
-                break
-        if entry is not None:
-            is_holiday = bool(entry.get("isHoliday", True))
-            name = entry.get("name")
+        entries = _get_holidays_for_year(parsed.year)
+        info = entries.get(parsed.isoformat())
+        if info is not None:
+            is_holiday = bool(info.get("isHoliday", True))
+            name = info.get("name")
         else:
-            # No explicit entry: weekend dates are holidays, weekdays are not.
-            is_weekend = parsed.weekday() >= 5  # 5=Sat, 6=Sun
-            is_holiday = is_weekend
+            is_holiday = parsed.weekday() >= 5  # weekend fallback
             name = None
-        return {
-            "date": parsed.isoformat(),
-            "isHoliday": is_holiday,
-            "name": name,
-        }
+        return {"date": parsed.isoformat(), "isHoliday": is_holiday, "name": name}
 
-    if year is not None:
-        return {
-            "year": year,
-            "holidays": holidays_by_year.get(str(year), []),
-        }
-
+    target_year = year if year is not None else datetime.now().year
+    entries = _get_holidays_for_year(target_year)
+    holiday_list = [
+        {"date": iso, "isHoliday": info["isHoliday"], "name": info.get("name")}
+        for iso, info in sorted(entries.items())
+    ]
     return {
-        "source": data.get("source"),
-        "updated": data.get("updated"),
-        "note": data.get("note"),
-        "holidays": holidays_by_year,
+        "year": target_year,
+        "source": "ruyut/TaiwanCalendar",
+        "holidays": holiday_list,
     }
