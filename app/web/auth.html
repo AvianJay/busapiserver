@@ -5,343 +5,205 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YABus 帳號登入</title>
+  
+  <!-- Load Roboto Font & Material Symbols -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+
+  <!-- Import Maps for @material/web -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@material/web/": "https://esm.run/@material/web/"
+      }
+    }
+  </script>
+
+  <!-- Import Material Web Components Modules -->
+  <script type="module">
+    import '@material/web/all.js';
+    import {styles as typescaleStyles} from '@material/web/typography/md-typescale-styles.js';
+    if (document.adoptedStyleSheets) {
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, typescaleStyles.styleSheet];
+    }
+  </script>
+
   <style>
     :root {
-      --bg-primary: #0b0f1a;
-      --surface: rgba(255, 255, 255, 0.04);
-      --surface-hover: rgba(255, 255, 255, 0.07);
-      --ink: #f0f2f5;
-      --ink-secondary: #94a3b8;
-      --muted: #64748b;
-      --line: rgba(255, 255, 255, 0.08);
-      --line-strong: rgba(255, 255, 255, 0.14);
-      --google: #ea4335;
-      --discord: #5865f2;
-      --accent: #6ee7b7;
-      --radius: 20px;
-      --radius-sm: 14px;
-      --radius-xs: 10px;
+      /* M3 Dark Palette */
+      --md-sys-color-primary: #80f3d6;
+      --md-sys-color-on-primary: #00382d;
+      --md-sys-color-primary-container: #005142;
+      --md-sys-color-on-primary-container: #9dfad7;
+      --md-sys-color-secondary: #b0ccc2;
+      --md-sys-color-on-secondary: #1b352e;
+      --md-sys-color-surface: #0f1418;
+      --md-sys-color-on-surface: #e1e3e0;
+      --md-sys-color-surface-container: #202327;
+      --md-sys-color-surface-container-high: #2a2d32;
+      --md-sys-color-outline: #8a928f;
+      --md-sys-color-outline-variant: #3f4946;
+      --md-sys-color-error: #ffb4ab;
+      --md-sys-color-on-error: #690005;
+      --md-sys-color-error-container: #93000a;
+      --md-sys-color-on-error-container: #ffdad6;
     }
 
     * {
       box-sizing: border-box;
+    }
+
+    body, h1, h2, h3, p, ul, ol, li, form, label {
       margin: 0;
       padding: 0;
     }
 
     body {
       min-height: 100vh;
-      color: var(--ink);
-      background: var(--bg-primary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 14px;
-      display: grid;
-      place-items: center;
+      background-color: var(--md-sys-color-surface);
+      color: var(--md-sys-color-on-surface);
+      font-family: Roboto, system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       padding: 24px;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 80% 50% at 20% -10%, rgba(110, 231, 183, 0.12), transparent),
-        radial-gradient(ellipse 60% 40% at 80% 10%, rgba(167, 139, 250, 0.1), transparent),
-        radial-gradient(ellipse 50% 60% at 50% 100%, rgba(88, 101, 242, 0.08), transparent);
-      pointer-events: none;
-      z-index: 0;
     }
 
     main {
-      position: relative;
-      z-index: 1;
-      width: min(980px, 100%);
-      display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 440px);
-      gap: 24px;
-      align-items: stretch;
-      animation: fadeInUp 0.5s ease both;
+      width: 100%;
+      max-width: 420px;
+      animation: fadeInUp 0.5s ease-out both;
     }
 
     @keyframes fadeInUp {
       from {
         opacity: 0;
-        transform: translateY(16px);
+        transform: translateY(20px);
       }
-
       to {
         opacity: 1;
         transform: translateY(0);
       }
     }
 
-    @keyframes float {
-
-      0%,
-      100% {
-        transform: translate(0, 0);
-      }
-
-      50% {
-        transform: translate(15px, -10px);
-      }
-    }
-
-    .hero,
-    .panel {
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      transition: border-color 0.3s ease;
-    }
-
-    .hero {
-      padding: 40px;
-      display: grid;
-      gap: 20px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .hero::before {
-      content: "";
-      position: absolute;
-      width: 400px;
-      height: 400px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(110, 231, 183, 0.08), transparent 70%);
-      right: -100px;
-      bottom: -150px;
-      pointer-events: none;
-      animation: float 8s ease-in-out infinite;
-    }
-
-    .hero::after {
-      content: "";
-      position: absolute;
-      width: 300px;
-      height: 300px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(167, 139, 250, 0.06), transparent 70%);
-      left: -80px;
-      top: -100px;
-      pointer-events: none;
-      animation: float 10s ease-in-out infinite reverse;
-    }
-
-    .eyebrow {
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--accent);
-      margin: 0;
-    }
-
-    h1 {
-      margin: 0;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      font-size: clamp(30px, 6vw, 52px);
-      line-height: 1.1;
-      max-width: 12ch;
-      background: linear-gradient(135deg, #f0f2f5 0%, #94a3b8 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
-    .hero p,
-    .panel p {
-      margin: 0;
-      line-height: 1.7;
-      color: var(--ink-secondary);
-      max-width: 50ch;
-      font-size: 14px;
-    }
-
-    .feature-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      position: relative;
-      z-index: 1;
-    }
-
-    .feature {
-      border-radius: var(--radius-sm);
-      background: var(--surface-hover);
-      border: 1px solid var(--line);
-      padding: 18px;
-      transition: border-color 0.2s, transform 0.2s;
-    }
-
-    .feature:hover {
-      border-color: var(--line-strong);
-      transform: translateY(-2px);
-    }
-
-    .feature strong {
-      display: block;
-      margin-bottom: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--ink);
-    }
-
-    .feature span {
-      color: var(--muted);
-      line-height: 1.5;
-      font-size: 13px;
-    }
-
-    .panel {
-      padding: 28px;
-      display: grid;
-      gap: 18px;
-      align-content: start;
-    }
-
-    .panel:hover {
-      border-color: var(--line-strong);
-    }
-
-    .panel-header h2 {
-      margin: 0 0 8px;
-      font-size: 24px;
-      font-weight: 700;
-      line-height: 1.1;
-      letter-spacing: -0.02em;
-    }
-
-    .buttons {
-      display: grid;
-      gap: 12px;
-    }
-
-    .button,
-    .button-link {
-      display: inline-flex;
-      justify-content: center;
+    .login-card {
+      background-color: var(--md-sys-color-surface-container);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 28px; /* M3 extra large shape */
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
       align-items: center;
-      gap: 10px;
-      width: 100%;
-      min-height: 50px;
-      padding: 14px 18px;
-      border-radius: var(--radius-xs);
-      border: 1px solid transparent;
-      font: inherit;
-      font-weight: 600;
-      font-size: 14px;
-      text-decoration: none;
-      cursor: pointer;
-      transition: all 0.2s ease;
+      text-align: center;
+      box-shadow: 0px 4px 24px rgba(0, 0, 0, 0.3);
     }
 
-    .button:hover,
-    .button-link:hover {
-      transform: translateY(-1px);
+    .brand-section {
+      margin-bottom: 32px;
+    }
+
+    .brand-title {
+      font-weight: 700;
+      color: var(--md-sys-color-primary);
+      margin-bottom: 8px;
+    }
+
+    .brand-subtitle {
+      color: var(--md-sys-color-on-surface);
+      opacity: 0.8;
+    }
+
+    .buttons-container {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    md-filled-button {
+      width: 100%;
+      height: 56px;
+      --md-filled-button-container-shape: 16px;
+      --md-filled-button-label-text-font: Roboto, system-ui;
+      --md-filled-button-label-text-size: 15px;
+      --md-filled-button-label-text-weight: 500;
     }
 
     .button-google {
-      color: #fff;
-      background: linear-gradient(135deg, #ea4335, #d33426);
-      box-shadow: 0 4px 20px rgba(234, 67, 53, 0.25);
-    }
-
-    .button-google:hover {
-      box-shadow: 0 8px 30px rgba(234, 67, 53, 0.35);
+      --md-filled-button-container-color: #e54235;
+      --md-filled-button-label-text-color: #ffffff;
+      --md-filled-button-hover-state-layer-color: #ffffff;
     }
 
     .button-discord {
-      color: #fff;
-      background: linear-gradient(135deg, #5865f2, #4752c4);
-      box-shadow: 0 4px 20px rgba(88, 101, 242, 0.25);
+      --md-filled-button-container-color: #5865f2;
+      --md-filled-button-label-text-color: #ffffff;
+      --md-filled-button-hover-state-layer-color: #ffffff;
     }
 
-    .button-discord:hover {
-      box-shadow: 0 8px 30px rgba(88, 101, 242, 0.35);
-    }
-
-    .button-link {
-      background: transparent;
-      border-color: var(--line-strong);
-      color: var(--ink-secondary);
-    }
-
-    .button-link:hover {
-      background: var(--surface-hover);
-      color: var(--ink);
-    }
-
-    .session-note {
-      padding: 16px 18px;
-      border-radius: var(--radius-sm);
-      background: var(--surface-hover);
-      border: 1px solid var(--line);
-      display: none;
-      gap: 6px;
-    }
-
-    .session-note strong {
-      font-size: 14px;
-      color: var(--ink);
-    }
-
-    .session-note span {
+    #sessionNote {
+      display: none; /* Managed by JS */
+      width: 100%;
+      gap: 8px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 16px;
+      padding: 16px;
+      background-color: var(--md-sys-color-surface-container-high);
+      color: var(--md-sys-color-on-surface);
+      margin-bottom: 24px;
+      text-align: left;
       font-size: 13px;
-      color: var(--ink-secondary);
+      line-height: 1.6;
     }
 
-    .muted-link {
-      color: var(--accent);
-      font-weight: 600;
+    #sessionNote strong {
+      font-size: 14px;
+      color: var(--md-sys-color-primary);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    #sessionNote a {
+      color: var(--md-sys-color-primary);
       text-decoration: none;
+      font-weight: 500;
     }
 
-    .muted-link:hover {
+    #sessionNote a:hover {
       text-decoration: underline;
-    }
-
-    @media (max-width: 860px) {
-      main {
-        grid-template-columns: 1fr;
-      }
-
-      .feature-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .hero,
-      .panel {
-        padding: 24px;
-      }
-
-      h1 {
-        font-size: 28px;
-      }
     }
   </style>
 </head>
 
 <body>
   <main>
-    <section class="panel">
-      <div class="panel-header">
-        <h2>選擇登入方式</h2>
+    <section class="login-card">
+      <div class="brand-section">
+        <h1 class="brand-title md-typescale-display-small">YABus 帳號登入</h1>
+        <p class="brand-subtitle md-typescale-body-medium">請選擇登入方式以同步帳號資料</p>
       </div>
 
-      <div class="session-note" id="sessionNote"></div>
+      <div id="sessionNote"></div>
 
-      <div class="buttons">
-        <a class="button button-google" id="googleLogin" href="#">使用 Google 登入</a>
-        <a class="button button-discord" id="discordLogin" href="#">使用 Discord 登入</a>
+      <div class="buttons-container">
+        <md-filled-button class="button-google" id="googleLogin" href="#">
+          <svg slot="icon" viewBox="0 0 24 24" width="18" height="18">
+            <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+            <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+            <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+            <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+          </svg>
+          使用 Google 登入
+        </md-filled-button>
+
+        <md-filled-button class="button-discord" id="discordLogin" href="#">
+          <svg slot="icon" viewBox="0 0 127.14 96.36" width="18" height="18" fill="currentColor">
+            <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.19,77.19,0,0,0-3.3,6.83A96.67,96.67,0,0,0,53.22,6.83,77.19,77.19,0,0,0,49.88,0,105.15,105.15,0,0,0,19.44,8.07C3.66,31.58-1.86,54.65,1,77.53A105.73,105.73,0,0,0,32,96.36a77.7,77.7,0,0,0,6.63-10.85,68.43,68.43,0,0,1-10.5-5c.88-.65,1.72-1.34,2.51-2a75.58,75.58,0,0,0,72.9,0c.79.71,1.63,1.4,2.51,2a68.43,68.43,0,0,1-10.5,5,77.7,77.7,0,0,0,6.63,10.85,105.73,105.73,0,0,0,31-18.83C129.87,50.75,124.23,27.87,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.9,46,53.9,53,48.72,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.24,60,73.24,53S78.41,40.36,84.69,40.36,96.14,46,96.14,53,91,65.69,84.69,65.69Z"/>
+          </svg>
+          使用 Discord 登入
+        </md-filled-button>
       </div>
     </section>
   </main>
@@ -400,15 +262,21 @@
         note.style.display = "none";
         return;
       }
-      note.style.display = "grid";
+      note.style.display = "block";
       note.innerHTML = [
         `<strong>目前已登入 ${session.display_name || "這個帳號"}</strong>`,
         `<span>上次登入方式：${session.provider || "unknown"}，你也可以直接去 <a class="muted-link" href="/account">帳戶頁</a> 管理連結與裝置。</span>`,
       ].join("");
     }
 
-    document.getElementById("googleLogin").href = buildStartUrl("google");
-    document.getElementById("discordLogin").href = buildStartUrl("discord");
+    // Material 3 button click navigation fallback for components inside anchor-like behavior
+    document.getElementById("googleLogin").addEventListener("click", () => {
+      window.location.href = buildStartUrl("google");
+    });
+    document.getElementById("discordLogin").addEventListener("click", () => {
+      window.location.href = buildStartUrl("discord");
+    });
+
     renderSessionNote();
   </script>
 </body>

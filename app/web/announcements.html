@@ -4,133 +4,324 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>YABus 公告管理</title>
+  
+  <!-- Load Roboto Font & Material Symbols -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+
+  <!-- Define the Import Map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@material/web/": "https://esm.run/@material/web/"
+      }
+    }
+  </script>
+
+  <!-- Import Material Web Components Modules -->
+  <script type="module">
+    import '@material/web/all.js';
+    import {styles as typescaleStyles} from '@material/web/typography/md-typescale-styles.js';
+    if (document.adoptedStyleSheets) {
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, typescaleStyles.styleSheet];
+    }
+  </script>
+
   <style>
-    :root{--bg:#0b0f1a;--bg2:#111827;--sf:rgba(255,255,255,.04);--sfh:rgba(255,255,255,.07);--sfs:rgba(255,255,255,.1);--ink:#f0f2f5;--ink2:#94a3b8;--mt:#64748b;--ln:rgba(255,255,255,.08);--lns:rgba(255,255,255,.14);--accent:#6ee7b7;--accent2:#a78bfa;--ok:#34d399;--warn:#fb923c;--err:#f87171;--info:#60a5fa;--r:20px;--rs:14px;--rx:10px}
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{min-height:100vh;color:var(--ink);background:var(--bg);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
-    body::before{content:"";position:fixed;inset:0;background:radial-gradient(ellipse 80% 50% at 20% -10%,rgba(110,231,183,.12),transparent),radial-gradient(ellipse 60% 40% at 80% 10%,rgba(167,139,250,.1),transparent),radial-gradient(ellipse 50% 60% at 50% 100%,rgba(88,101,242,.08),transparent);pointer-events:none;z-index:0}
-    .shell{position:relative;z-index:1;width:min(1100px,calc(100% - 40px));margin:0 auto;padding:40px 0 60px;display:grid;gap:20px}
-    .glass,.card{border:1px solid var(--ln);background:var(--sf);border-radius:var(--r);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);transition:border-color .3s,background .3s}
-    .glass:hover{border-color:var(--lns);background:var(--sfh)}
-    .card{padding:20px;display:grid;gap:10px;background:var(--sfh);transition:border-color .2s,transform .2s;cursor:pointer}
-    .card:hover{border-color:var(--lns);transform:translateY(-2px)}
-    @keyframes fadeInUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
-    @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(15px,-10px)}}
-    .shell>*{animation:fadeInUp .5s ease both}
-    .shell>:nth-child(2){animation-delay:.08s}
-    .shell>:nth-child(3){animation-delay:.16s}
-    .hero{padding:40px;display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;position:relative;overflow:hidden}
-    .hero::before{content:"";position:absolute;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(110,231,183,.08),transparent 70%);right:-150px;top:-200px;pointer-events:none;animation:float 8s ease-in-out infinite}
-    .hero-left{position:relative;z-index:1}
-    .eyebrow{text-transform:uppercase;letter-spacing:.2em;font-size:11px;font-weight:600;color:var(--accent);margin-bottom:8px}
-    h1{font-size:clamp(26px,4vw,40px);font-weight:800;letter-spacing:-.02em;background:linear-gradient(135deg,#f0f2f5,#94a3b8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-    h2{font-size:18px;font-weight:700;letter-spacing:-.01em}
-    h3{font-size:15px;font-weight:600}
-    .panel{padding:28px;display:grid;gap:20px;align-content:start}
-    .panel-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-    .ann-list{display:grid;gap:12px}
-    .card-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
-    .card-meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 12px;border:1px solid var(--ln);background:var(--sf);font-size:11px;font-weight:600}
-    .pill-ok{color:var(--ok);border-color:rgba(52,211,153,.25)}
-    .pill-warn{color:var(--warn);border-color:rgba(251,146,60,.25)}
-    .pill-err{color:var(--err);border-color:rgba(248,113,113,.25)}
-    .pill-info{color:var(--info);border-color:rgba(96,165,250,.25)}
-    .mono{font-family:'SF Mono','Cascadia Code','Consolas',monospace;font-size:12px;color:var(--mt)}
-    p{margin:0;color:var(--ink2);font-size:13px}
-    .empty{padding:24px;border-radius:var(--rs);border:1px dashed rgba(255,255,255,.1);color:var(--mt);text-align:center;font-size:13px}
-    .btn{display:inline-flex;justify-content:center;align-items:center;gap:8px;min-height:40px;padding:9px 18px;border-radius:var(--rx);border:1px solid transparent;font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
-    .btn:hover:not(:disabled){transform:translateY(-1px)}.btn:disabled{opacity:.4;cursor:not-allowed}
-    .btn-p{color:#0b0f1a;background:linear-gradient(135deg,var(--accent),#34d399);box-shadow:0 4px 20px rgba(110,231,183,.25)}
-    .btn-p:hover:not(:disabled){box-shadow:0 8px 30px rgba(110,231,183,.35)}
-    .btn-g{background:transparent;border-color:var(--lns);color:var(--ink2)}.btn-g:hover:not(:disabled){background:var(--sfh);color:var(--ink)}
-    .btn-d{color:#fff;background:linear-gradient(135deg,#ef4444,#dc2626);box-shadow:0 4px 20px rgba(239,68,68,.2)}
-    .btn-d:hover:not(:disabled){box-shadow:0 8px 30px rgba(239,68,68,.3)}
-    .btn-s{color:#fff;background:linear-gradient(135deg,var(--accent2),#8b5cf6);box-shadow:0 4px 20px rgba(167,139,250,.25)}
-    /* Modal */
-    .overlay{display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);justify-content:center;align-items:start;padding:40px 20px;overflow-y:auto}
-    .overlay.open{display:flex}
-    .modal{width:min(640px,100%);background:var(--bg2);border:1px solid var(--lns);border-radius:var(--r);padding:32px;display:grid;gap:20px;animation:fadeInUp .3s ease}
-    .modal h2{color:var(--ink)}
-    .field{display:grid;gap:6px}
-    .field label{font-size:12px;font-weight:600;color:var(--mt);text-transform:uppercase;letter-spacing:.08em}
-    .field input,.field textarea,.field select{width:100%;padding:10px 14px;border-radius:var(--rx);border:1px solid var(--ln);background:var(--sf);color:var(--ink);font:inherit;font-size:13px;transition:border-color .2s}
-    .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--accent)}
-    .field textarea{min-height:120px;resize:vertical}
-    .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .field-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-    .modal-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
-    .notice{padding:16px 20px;border-radius:var(--rs);display:grid;gap:8px}
-    .notice-ok{border:1px solid rgba(52,211,153,.25);background:rgba(52,211,153,.08)}.notice-ok h3{color:var(--ok)}
-    .notice-err{border:1px solid rgba(248,113,113,.25);background:rgba(248,113,113,.08)}.notice-err h3{color:var(--err)}
-    .content-preview{max-height:80px;overflow:hidden;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--mt);line-height:1.5}
-    @media(max-width:680px){.shell{width:calc(100% - 24px);padding-top:24px}.hero,.panel{padding:20px}.field-row,.field-row-3{grid-template-columns:1fr}h1{font-size:24px}}
+    :root {
+      /* M3 Dark Palette */
+      --md-sys-color-primary: #80f3d6;
+      --md-sys-color-on-primary: #00382d;
+      --md-sys-color-primary-container: #005142;
+      --md-sys-color-on-primary-container: #9dfad7;
+      --md-sys-color-secondary: #b0ccc2;
+      --md-sys-color-on-secondary: #1b352e;
+      --md-sys-color-surface: #0f1418;
+      --md-sys-color-on-surface: #e1e3e0;
+      --md-sys-color-surface-container: #202327;
+      --md-sys-color-surface-container-high: #2a2d32;
+      --md-sys-color-outline: #8a928f;
+      --md-sys-color-outline-variant: #3f4946;
+      --md-sys-color-error: #ffb4ab;
+      --md-sys-color-on-error: #690005;
+      --md-sys-color-error-container: #93000a;
+      --md-sys-color-on-error-container: #ffdad6;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body, h1, h2, h3, p, ul, ol, li, form, label {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      background-color: var(--md-sys-color-surface);
+      color: var(--md-sys-color-on-surface);
+      font-family: Roboto, system-ui, -apple-system, sans-serif;
+      padding-bottom: 60px;
+    }
+
+    /* Tabs Styling */
+    md-tabs {
+      background-color: var(--md-sys-color-surface-container);
+      --md-tabs-active-tab-indicator-color: var(--md-sys-color-primary);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    md-primary-tab {
+      --md-primary-tab-active-label-text-color: var(--md-sys-color-primary);
+      --md-primary-tab-active-icon-color: var(--md-sys-color-primary);
+      --md-primary-tab-label-text-color: var(--md-sys-color-outline);
+      --md-primary-tab-icon-color: var(--md-sys-color-outline);
+      font-family: Roboto, system-ui;
+    }
+
+    /* Layout Containers */
+    main {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .header-panel {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    /* M3 Card Container Styling */
+    .m3-card {
+      background-color: var(--md-sys-color-surface-container);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .m3-card-title {
+      font-weight: 700;
+      color: var(--md-sys-color-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ann-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Dialog styling */
+    md-dialog {
+      --md-dialog-container-color: var(--md-sys-color-surface-container-high);
+      max-width: 600px;
+      width: 100%;
+    }
+
+    .dialog-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 16px 0;
+    }
+
+    .form-row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 600px) {
+      .form-row-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    md-outlined-text-field, md-outlined-select {
+      width: 100%;
+    }
+
+    .notice {
+      border-radius: 12px;
+      padding: 16px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      margin-bottom: 16px;
+    }
+
+    .notice.notice-ok {
+      background-color: rgba(52, 211, 153, 0.1);
+      border-color: rgba(52, 211, 153, 0.4);
+      color: #34d399;
+    }
+
+    .notice.notice-err {
+      background-color: rgba(248, 113, 113, 0.1);
+      border-color: rgba(248, 113, 113, 0.4);
+      color: #f87171;
+    }
+
+    .notice h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .notice p {
+      font-size: 13px;
+      margin: 0;
+    }
+
+    .content-preview {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .empty {
+      color: var(--md-sys-color-outline);
+      font-size: 13px;
+      text-align: center;
+      padding: 32px;
+      border: 1px dashed var(--md-sys-color-outline-variant);
+      border-radius: 12px;
+    }
+
+    .mono {
+      font-family: monospace;
+    }
   </style>
 </head>
 <body>
-  <main class="shell">
-    <section class="hero glass">
-      <div class="hero-left">
-        <div class="eyebrow">Announcements</div>
-        <h1>公告管理</h1>
-        <p style="margin-top:8px">建立、編輯與管理應用程式內的公告。</p>
+
+  <md-tabs id="adminTabs" active-tab-index="1">
+    <md-primary-tab id="tabAnalytics">
+      <md-icon slot="icon">analytics</md-icon>
+      數據統計
+    </md-primary-tab>
+    <md-primary-tab id="tabAnnouncements">
+      <md-icon slot="icon">campaign</md-icon>
+      公告管理
+    </md-primary-tab>
+    <md-primary-tab id="tabUsers">
+      <md-icon slot="icon">manage_accounts</md-icon>
+      用戶管理
+    </md-primary-tab>
+    <md-primary-tab id="tabFeedbacks">
+      <md-icon slot="icon">inbox</md-icon>
+      意見回饋
+    </md-primary-tab>
+    <md-primary-tab id="tabAccount">
+      <md-icon slot="icon">account_circle</md-icon>
+      帳戶中心
+    </md-primary-tab>
+  </md-tabs>
+
+  <main>
+    <section class="header-panel">
+      <div>
+        <h1 class="md-typescale-headline-medium" style="font-weight: 800;">公告管理</h1>
+        <p class="md-typescale-body-medium" style="color: var(--md-sys-color-outline); margin-top: 4px;">
+          建立、編輯與管理應用程式內的公告。
+        </p>
       </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;position:relative;z-index:1">
-        <button class="btn btn-p" id="btnNew">＋ 新增公告</button>
-        <button class="btn btn-g" id="btnRefresh">重新整理</button>
-        <a class="btn btn-g" href="/account">← 帳戶中心</a>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <md-filled-button id="btnNew">
+          <md-icon slot="icon">add</md-icon>
+          新增公告
+        </md-filled-button>
+        <md-outlined-button id="btnRefresh">
+          <md-icon slot="icon">refresh</md-icon>
+          重新整理
+        </md-outlined-button>
       </div>
     </section>
 
-    <section id="noticeArea"></section>
-    <section class="panel glass">
-      <div class="panel-header"><h2>所有公告</h2><span class="mono" id="countLabel"></span></div>
-      <div class="ann-list" id="annList"><div class="empty">載入中…</div></div>
+    <div id="noticeArea"></div>
+
+    <section class="m3-card">
+      <h2 class="m3-card-title md-typescale-title-medium">
+        <md-icon>list</md-icon>
+        所有公告 (<span id="countLabel">共 — 則</span>)
+      </h2>
+      <div class="ann-list" id="annList">
+        <div class="empty">載入中…</div>
+      </div>
     </section>
   </main>
 
-  <!-- Editor Modal -->
-  <div class="overlay" id="overlay">
-    <div class="modal">
-      <h2 id="modalTitle">新增公告</h2>
-      <div class="field"><label>ID（留空自動產生）</label><input id="fId" placeholder="my-announcement-id"/></div>
-      <div class="field"><label>標題 *</label><input id="fTitle" required/></div>
-      <div class="field"><label>內容 (Markdown) *</label><textarea id="fContent"></textarea></div>
-      <div class="field-row">
-        <div class="field"><label>作者</label><input id="fAuthor" placeholder="admin"/></div>
-        <div class="field"><label>音效 URL</label><input id="fSound" placeholder="https://..."/></div>
+  <!-- Editor Modal inside MD3 Dialog -->
+  <md-dialog id="editorDialog">
+    <div slot="headline" id="modalTitle">新增公告</div>
+    <form slot="content" id="dialogForm" method="dialog" class="dialog-form">
+      <md-outlined-text-field id="fId" label="ID（留空自動產生）" placeholder="my-announcement-id"></md-outlined-text-field>
+      <md-outlined-text-field id="fTitle" required label="標題 *"></md-outlined-text-field>
+      <md-outlined-text-field id="fContent" type="textarea" required label="內容 (Markdown) *" rows="5"></md-outlined-text-field>
+      
+      <div class="form-row-2">
+        <md-outlined-text-field id="fAuthor" label="作者" placeholder="admin"></md-outlined-text-field>
+        <md-outlined-text-field id="fSound" label="音效 URL" placeholder="https://..."></md-outlined-text-field>
       </div>
-      <div class="field-row">
-        <div class="field"><label>建立時間 (Unix)</label><input id="fCreatedAt" type="number"/></div>
-        <div class="field"><label>到期時間 (Unix)</label><input id="fExpireAt" type="number"/></div>
+      
+      <div class="form-row-2">
+        <md-outlined-text-field id="fCreatedAt" type="number" label="建立時間 (Unix)"></md-outlined-text-field>
+        <md-outlined-text-field id="fExpireAt" type="number" label="到期時間 (Unix)"></md-outlined-text-field>
       </div>
-      <div class="field-row">
-        <div class="field"><label>紅點行為</label><select id="fRedDot"><option value="none">none</option><option value="once">once</option><option value="forever">forever</option></select></div>
-        <div class="field"><label>彈出行為</label><select id="fPopup"><option value="none">none</option><option value="once">once</option><option value="forever">forever</option></select></div>
+      
+      <div class="form-row-2">
+        <md-outlined-select id="fRedDot" label="紅點行為">
+          <md-select-option value="none">none</md-select-option>
+          <md-select-option value="once">once</md-select-option>
+          <md-select-option value="forever">forever</md-select-option>
+        </md-outlined-select>
+        <md-outlined-select id="fPopup" label="彈出行為">
+          <md-select-option value="none">none</md-select-option>
+          <md-select-option value="once">once</md-select-option>
+          <md-select-option value="forever">forever</md-select-option>
+        </md-outlined-select>
       </div>
-      <div class="field" id="pushField">
-        <label style="text-transform:none;letter-spacing:normal">
-          <input id="fSendPush" type="checkbox" style="width:auto;margin-right:8px;vertical-align:middle"/>
-          建立後立即發送 FCM 推播（僅 Android / Web）
+      
+      <div id="pushField" style="margin-top: 8px;">
+        <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; color: var(--md-sys-color-on-surface);">
+          <md-switch id="fSendPush"></md-switch>
+          <span>建立後立即發送 FCM 推播（僅 Android / Web）</span>
         </label>
       </div>
-      <div class="field"><label>目標平台（逗號分隔，空白=全平台）</label><input id="fPlatforms" placeholder="android, ios, web"/></div>
-      <div class="field"><label>版本限制</label><input id="fVersion" placeholder=">=1.2.0"/></div>
-      <div class="field-row">
-        <div class="field"><label>Embed 類型</label><input id="fEmbedType" placeholder="image"/></div>
-        <div class="field"><label>Embed URL</label><input id="fEmbedUrl" placeholder="https://..."/></div>
+      
+      <md-outlined-text-field id="fPlatforms" label="目標平台（逗號分隔，空白=全平台）" placeholder="android, ios, web"></md-outlined-text-field>
+      <md-outlined-text-field id="fVersion" label="版本限制" placeholder=">=1.2.0"></md-outlined-text-field>
+      
+      <div class="form-row-2">
+        <md-outlined-text-field id="fEmbedType" label="Embed 類型" placeholder="image"></md-outlined-text-field>
+        <md-outlined-text-field id="fEmbedUrl" label="Embed URL" placeholder="https://..."></md-outlined-text-field>
       </div>
-      <div class="field"><label>Actions (JSON 陣列)</label><textarea id="fActions" style="min-height:60px" placeholder='[{"type":"link","label":"了解更多","url":"https://..."}]'></textarea></div>
-      <div class="modal-actions">
-        <button class="btn btn-g" id="btnCancel" type="button">取消</button>
-        <button class="btn btn-d" id="btnDelete" type="button" style="display:none">刪除</button>
-        <button class="btn btn-p" id="btnSave" type="button">儲存</button>
-      </div>
+      
+      <md-outlined-text-field id="fActions" type="textarea" label="Actions (JSON 陣列)" placeholder='[{"type":"link","label":"了解更多","url":"https://..."}]' rows="2"></md-outlined-text-field>
+    </form>
+    <div slot="actions">
+      <md-outlined-button id="btnCancel">取消</md-outlined-button>
+      <md-outlined-button id="btnDelete" style="--md-outlined-button-outline-color: var(--md-sys-color-error); --md-outlined-button-label-text-color: var(--md-sys-color-error); display: none;">刪除 (過期)</md-outlined-button>
+      <md-filled-button id="btnSave">儲存</md-filled-button>
     </div>
-  </div>
+  </md-dialog>
 
   <script>
     const AUTH_TOKEN_COOKIE = "yabus_auth_token";
@@ -174,7 +365,7 @@
     function showNotice(tone, title, msg) {
       const a = document.getElementById("noticeArea");
       const cls = tone === "error" ? "notice-err" : "notice-ok";
-      a.innerHTML = `<div class="notice ${cls} glass"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(msg)}</p></div>`;
+      a.innerHTML = `<div class="notice ${cls}"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(msg)}</p></div>`;
       setTimeout(() => { if (a.firstChild) a.innerHTML = ""; }, 6000);
     }
 
@@ -195,19 +386,23 @@
 
     function statusPill(ann) {
       const now = Math.floor(Date.now() / 1000);
-      if (ann.expire_at && ann.expire_at <= now) return `<span class="pill pill-err">已過期</span>`;
-      if (ann.expire_at) return `<span class="pill pill-warn">限時</span>`;
-      return `<span class="pill pill-ok">啟用中</span>`;
+      if (ann.expire_at && ann.expire_at <= now) {
+        return `<md-filter-chip label="已過期" selected style="--md-filter-chip-selected-container-color: var(--md-sys-color-error-container); --md-filter-chip-selected-label-text-color: var(--md-sys-color-on-error-container);"></md-filter-chip>`;
+      }
+      if (ann.expire_at) {
+        return `<md-filter-chip label="限時" selected style="--md-filter-chip-selected-container-color: rgba(251, 146, 60, 0.2); --md-filter-chip-selected-label-text-color: #fb923c;"></md-filter-chip>`;
+      }
+      return `<md-filter-chip label="啟用中" selected style="--md-filter-chip-selected-container-color: var(--md-sys-color-primary-container); --md-filter-chip-selected-label-text-color: var(--md-sys-color-on-primary-container);"></md-filter-chip>`;
     }
 
     function targetsPills(ann) {
       const parts = [];
       const t = ann.targets;
       if (t && t.platforms && t.platforms.length) {
-        parts.push(...t.platforms.map(p => `<span class="pill pill-info">${escapeHtml(p)}</span>`));
+        parts.push(...t.platforms.map(p => `<md-filter-chip label="${escapeHtml(p)}"></md-filter-chip>`));
       }
       if (t && t.version_constraint) {
-        parts.push(`<span class="pill pill-info">${escapeHtml(t.version_constraint)}</span>`);
+        parts.push(`<md-filter-chip label="${escapeHtml(t.version_constraint)}"></md-filter-chip>`);
       }
       return parts.join("");
     }
@@ -217,16 +412,16 @@
       document.getElementById("countLabel").textContent = `共 ${announcements.length} 則`;
       if (!announcements.length) { root.innerHTML = '<div class="empty">目前沒有任何公告。</div>'; return; }
       root.innerHTML = announcements.map(a => `
-        <article class="card" data-id="${escapeHtml(a.id)}">
-          <div class="card-head">
-            <h3>${escapeHtml(a.title)}</h3>
-            <div class="card-meta">${statusPill(a)}${targetsPills(a)}</div>
+        <article class="m3-card card" data-id="${escapeHtml(a.id)}" style="cursor: pointer; background-color: var(--md-sys-color-surface-container-high);">
+          <div class="card-head" style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
+            <h3 class="md-typescale-title-medium" style="font-weight: 700; margin: 0;">${escapeHtml(a.title)}</h3>
+            <div class="card-meta" style="display: flex; gap: 8px; align-items: center;">${statusPill(a)}${targetsPills(a)}</div>
           </div>
-          <div class="content-preview">${escapeHtml(a.content)}</div>
-          <div class="card-meta">
+          <div class="content-preview" style="color: var(--md-sys-color-outline); margin: 8px 0; font-size: 13px;">${escapeHtml(a.content)}</div>
+          <div class="card-meta" style="display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--md-sys-color-outline);">
             <span class="mono">${escapeHtml(a.id)}</span>
-            <p>${escapeHtml(fmtTime(a.created_at))}</p>
-            ${a.author ? `<p>by ${escapeHtml(a.author)}</p>` : ""}
+            <span>${escapeHtml(fmtTime(a.created_at))}</span>
+            ${a.author ? `<span>by ${escapeHtml(a.author)}</span>` : ""}
           </div>
         </article>
       `).join("");
@@ -235,9 +430,6 @@
 
     async function loadAll() {
       try {
-        // Use a far-future approach: fetch ALL including expired via the management endpoint
-        // The public API filters by expiry, so we query the DB directly through a custom admin endpoint
-        // Fallback: use public API (only shows non-expired)
         announcements = await apiFetch("/api/v1/announcements/all");
         renderList();
       } catch (e) {
@@ -248,8 +440,8 @@
     function openEditor(id) {
       editingId = id || null;
       document.getElementById("modalTitle").textContent = id ? "編輯公告" : "新增公告";
-      document.getElementById("btnDelete").style.display = id ? "" : "none";
-      document.getElementById("pushField").style.display = id ? "none" : "";
+      document.getElementById("btnDelete").style.display = id ? "inline-flex" : "none";
+      document.getElementById("pushField").style.display = id ? "none" : "block";
       const ann = id ? announcements.find(a => a.id === id) : null;
 
       document.getElementById("fId").value = ann ? ann.id : "";
@@ -273,12 +465,12 @@
       document.getElementById("fEmbedUrl").value = embed ? embed.url : "";
 
       document.getElementById("fActions").value = ann && ann.actions ? JSON.stringify(ann.actions, null, 2) : "";
-      document.getElementById("overlay").classList.add("open");
+      document.getElementById("editorDialog").show();
     }
 
     function closeEditor() {
       editingId = null;
-      document.getElementById("overlay").classList.remove("open");
+      document.getElementById("editorDialog").close();
     }
 
     function buildPayload(includePush = false) {
@@ -365,7 +557,6 @@
       if (!editingId) return;
       if (!confirm(`確定要讓公告「${editingId}」立即過期嗎？`)) return;
       try {
-        // No DELETE endpoint — expire it by setting expire_at to now
         const now = Math.floor(Date.now() / 1000);
         const headers = { "Content-Type": "application/json", ...authHeaders() };
         await fetch(`/api/v1/announcements/${encodeURIComponent(editingId)}`, {
@@ -384,7 +575,13 @@
     document.getElementById("btnCancel").addEventListener("click", closeEditor);
     document.getElementById("btnSave").addEventListener("click", save);
     document.getElementById("btnDelete").addEventListener("click", deleteAnn);
-    document.getElementById("overlay").addEventListener("click", e => { if (e.target === e.currentTarget) closeEditor(); });
+
+    // Navigation setup
+    document.getElementById("tabAnalytics").addEventListener("click", () => window.location.href = "/admin/analytics");
+    document.getElementById("tabAnnouncements").addEventListener("click", () => window.location.href = "/admin/announcements");
+    document.getElementById("tabUsers").addEventListener("click", () => window.location.href = "/admin/user_manage");
+    document.getElementById("tabFeedbacks").addEventListener("click", () => window.location.href = "/admin/feedbacks");
+    document.getElementById("tabAccount").addEventListener("click", () => window.location.href = "/account");
 
     // Boot
     if (!token()) { window.location.replace("/auth"); }

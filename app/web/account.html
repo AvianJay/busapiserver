@@ -5,584 +5,338 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YABus 帳戶中心</title>
+  
+  <!-- Load Roboto Font & Material Symbols -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+
+  <!-- Import Maps for @material/web -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@material/web/": "https://esm.run/@material/web/"
+      }
+    }
+  </script>
+
+  <!-- Import Material Web Components Modules -->
+  <script type="module">
+    import '@material/web/all.js';
+    import {styles as typescaleStyles} from '@material/web/typography/md-typescale-styles.js';
+    if (document.adoptedStyleSheets) {
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, typescaleStyles.styleSheet];
+    }
+  </script>
+
   <style>
     :root {
-      --bg-primary: #0b0f1a;
-      --bg-secondary: #111827;
-      --surface: rgba(255, 255, 255, 0.04);
-      --surface-hover: rgba(255, 255, 255, 0.07);
-      --surface-strong: rgba(255, 255, 255, 0.1);
-      --ink: #f0f2f5;
-      --ink-secondary: #94a3b8;
-      --muted: #64748b;
-      --line: rgba(255, 255, 255, 0.08);
-      --line-strong: rgba(255, 255, 255, 0.14);
-      --google: #ea4335;
-      --google-glow: rgba(234, 67, 53, 0.25);
-      --discord: #5865f2;
-      --discord-glow: rgba(88, 101, 242, 0.25);
-      --success: #34d399;
-      --success-glow: rgba(52, 211, 153, 0.15);
-      --warning: #fb923c;
-      --warning-glow: rgba(251, 146, 60, 0.15);
-      --error: #f87171;
-      --error-glow: rgba(248, 113, 113, 0.15);
-      --info: #60a5fa;
-      --info-glow: rgba(96, 165, 250, 0.15);
-      --accent: #6ee7b7;
-      --accent-secondary: #a78bfa;
-      --radius: 20px;
-      --radius-sm: 14px;
-      --radius-xs: 10px;
+      /* M3 Dark Palette */
+      --md-sys-color-primary: #80f3d6;
+      --md-sys-color-on-primary: #00382d;
+      --md-sys-color-primary-container: #005142;
+      --md-sys-color-on-primary-container: #9dfad7;
+      --md-sys-color-secondary: #b0ccc2;
+      --md-sys-color-on-secondary: #1b352e;
+      --md-sys-color-surface: #0f1418;
+      --md-sys-color-on-surface: #e1e3e0;
+      --md-sys-color-surface-container: #202327;
+      --md-sys-color-surface-container-high: #2a2d32;
+      --md-sys-color-outline: #8a928f;
+      --md-sys-color-outline-variant: #3f4946;
+      --md-sys-color-error: #ffb4ab;
+      --md-sys-color-on-error: #690005;
+      --md-sys-color-error-container: #93000a;
+      --md-sys-color-on-error-container: #ffdad6;
     }
 
     * {
       box-sizing: border-box;
+    }
+
+    body, h1, h2, h3, p, ul, ol, li, form, label {
       margin: 0;
       padding: 0;
     }
 
     body {
       min-height: 100vh;
-      color: var(--ink);
-      background: var(--bg-primary);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 14px;
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
+      background-color: var(--md-sys-color-surface);
+      color: var(--md-sys-color-on-surface);
+      font-family: Roboto, system-ui, -apple-system, sans-serif;
+      padding-bottom: 60px;
     }
 
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 80% 50% at 20% -10%, rgba(110, 231, 183, 0.12), transparent),
-        radial-gradient(ellipse 60% 40% at 80% 10%, rgba(167, 139, 250, 0.1), transparent),
-        radial-gradient(ellipse 50% 60% at 50% 100%, rgba(88, 101, 242, 0.08), transparent);
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    .shell {
-      position: relative;
-      z-index: 1;
-      width: min(1200px, calc(100% - 40px));
-      margin: 0 auto;
-      padding: 40px 0 60px;
-      display: grid;
-      gap: 20px;
-    }
-
-    .hero,
-    .panel,
-    .identity,
-    .device {
-      border: 1px solid var(--line);
-      background: var(--surface);
-      border-radius: var(--radius);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      transition: border-color 0.3s ease, background 0.3s ease;
-    }
-
-    .panel:hover {
-      border-color: var(--line-strong);
-      background: var(--surface-hover);
-    }
-
-    .hero {
-      padding: 40px;
-      display: grid;
-      grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.7fr);
-      gap: 24px;
+    /* Header Styling */
+    header {
+      background-color: var(--md-sys-color-surface-container);
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
       align-items: center;
-      overflow: hidden;
-      position: relative;
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
 
-    .hero::before {
-      content: "";
-      position: absolute;
-      width: 500px;
-      height: 500px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(110, 231, 183, 0.08), transparent 70%);
-      right: -150px;
-      top: -200px;
-      pointer-events: none;
-      animation: float 8s ease-in-out infinite;
-    }
-
-    .hero::after {
-      content: "";
-      position: absolute;
-      width: 300px;
-      height: 300px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(167, 139, 250, 0.06), transparent 70%);
-      left: -100px;
-      bottom: -150px;
-      pointer-events: none;
-      animation: float 10s ease-in-out infinite reverse;
-    }
-
-    @keyframes float {
-
-      0%,
-      100% {
-        transform: translate(0, 0);
-      }
-
-      50% {
-        transform: translate(15px, -10px);
-      }
-    }
-
-    @keyframes fadeInUp {
-      from {
-        opacity: 0;
-        transform: translateY(16px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    .shell>* {
-      animation: fadeInUp 0.5s ease both;
-    }
-
-    .shell> :nth-child(2) {
-      animation-delay: 0.08s;
-    }
-
-    .shell> :nth-child(3) {
-      animation-delay: 0.16s;
-    }
-
-    .eyebrow {
-      margin: 0 0 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.2em;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--accent);
-    }
-
-    h1,
-    h2,
-    h3 {
-      margin: 0;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
-
-    h1 {
-      font-size: clamp(30px, 5vw, 48px);
-      line-height: 1.1;
-      max-width: 14ch;
-      background: linear-gradient(135deg, #f0f2f5 0%, #94a3b8 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
-    h2 {
-      font-size: 20px;
-    }
-
-    h3 {
-      font-size: 16px;
-      font-weight: 600;
-    }
-
-    .hero p,
-    .panel p,
-    .device p,
-    .identity p {
-      margin: 0;
-      color: var(--ink-secondary);
-      line-height: 1.7;
-      font-size: 14px;
-    }
-
-    .hero-aside {
-      position: relative;
-      z-index: 1;
-      display: grid;
-      gap: 14px;
-    }
-
-    .badge {
-      display: inline-flex;
+    .header-title-section {
+      display: flex;
       align-items: center;
-      padding: 8px 16px;
-      border-radius: 999px;
-      border: 1px solid var(--line-strong);
-      background: rgba(110, 231, 183, 0.08);
-      color: var(--accent);
-      font-weight: 600;
-      font-size: 13px;
-      width: fit-content;
+      gap: 16px;
     }
 
-    .notice {
-      padding: 20px 24px;
-      display: grid;
+    .header-actions {
+      display: flex;
+      align-items: center;
       gap: 12px;
     }
 
-    .notice h2 {
-      font-size: 17px;
-    }
-
-    .notice-success {
-      border-color: rgba(52, 211, 153, 0.25);
-      background: var(--success-glow);
-    }
-
-    .notice-success h2 {
-      color: var(--success);
-    }
-
-    .notice-error {
-      border-color: rgba(248, 113, 113, 0.25);
-      background: var(--error-glow);
-    }
-
-    .notice-error h2 {
-      color: var(--error);
-    }
-
-    .notice-info {
-      border-color: rgba(96, 165, 250, 0.2);
-      background: var(--info-glow);
-    }
-
-    .notice-info h2 {
-      color: var(--info);
-    }
-
-    .notice-warning {
-      border-color: rgba(251, 146, 60, 0.25);
-      background: var(--warning-glow);
-    }
-
-    .notice-warning h2 {
-      color: var(--warning);
-    }
-
-    .notice-actions,
-    .top-actions {
+    /* Page Layout */
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 24px;
       display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
+      flex-direction: column;
+      gap: 24px;
     }
 
-    .grid {
+    .grid-2 {
       display: grid;
-      grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
-      gap: 20px;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
     }
 
-    .panel {
-      padding: 28px;
-      display: grid;
-      gap: 20px;
-      align-content: start;
+    @media (max-width: 768px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      header {
+        padding: 12px 16px;
+        flex-direction: column;
+        gap: 12px;
+        align-items: stretch;
+        text-align: center;
+      }
+      .header-title-section {
+        flex-direction: column;
+        gap: 8px;
+      }
+      .header-actions {
+        justify-content: center;
+      }
     }
 
-    .panel-header {
-      display: grid;
+    /* M3 Card Container Styling */
+    .m3-card {
+      background-color: var(--md-sys-color-surface-container);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 16px; /* M3 Medium shape */
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .m3-card-title {
+      color: var(--md-sys-color-primary);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
       gap: 8px;
     }
 
-    .metrics {
+    /* Metrics Grid */
+    .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(2, 1fr);
       gap: 12px;
     }
 
-    .metric {
-      padding: 18px;
-      border-radius: var(--radius-sm);
-      background: var(--surface-hover);
-      border: 1px solid var(--line);
-      transition: border-color 0.2s, transform 0.2s;
+    .metric-item {
+      background-color: var(--md-sys-color-surface-container-high);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 12px;
+      padding: 12px 16px;
     }
 
-    .metric:hover {
-      border-color: var(--line-strong);
-      transform: translateY(-2px);
-    }
-
-    .metric strong {
-      display: block;
+    .metric-label {
       font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      margin-bottom: 8px;
       text-transform: uppercase;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.8px;
+      color: var(--md-sys-color-outline);
+      margin-bottom: 4px;
     }
 
-    .metric span {
-      display: block;
+    .metric-value {
       font-size: 15px;
       font-weight: 500;
-      line-height: 1.4;
-      word-break: break-word;
-      color: var(--ink);
+      word-break: break-all;
     }
 
-    .identity-list,
-    .device-list {
-      display: grid;
-      gap: 12px;
+    /* Notification Banner */
+    .notice-banner {
+      border-radius: 12px;
+      padding: 16px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      font-size: 14px;
+      line-height: 1.6;
     }
 
-    .identity,
-    .device {
-      padding: 20px;
-      display: grid;
-      gap: 10px;
-      background: var(--surface-hover);
-      transition: border-color 0.2s, transform 0.2s;
+    .notice-banner.tone-success {
+      background-color: rgba(52, 211, 153, 0.1);
+      border-color: rgba(52, 211, 153, 0.4);
+      color: #34d399;
     }
 
-    .identity:hover,
-    .device:hover {
-      border-color: var(--line-strong);
-      transform: translateY(-2px);
+    .notice-banner.tone-error {
+      background-color: rgba(248, 113, 113, 0.1);
+      border-color: rgba(248, 113, 113, 0.4);
+      color: #f87171;
     }
 
-    .identity-head,
-    .device-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
+    .notice-banner.tone-info {
+      background-color: rgba(96, 165, 250, 0.1);
+      border-color: rgba(96, 165, 250, 0.4);
+      color: #60a5fa;
     }
 
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border-radius: 999px;
-      padding: 6px 14px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      font-size: 12px;
-      font-weight: 600;
-    }
-
-    .pill-google {
-      color: var(--google);
-      border-color: rgba(234, 67, 53, 0.25);
-    }
-
-    .pill-discord {
-      color: var(--discord);
-      border-color: rgba(88, 101, 242, 0.25);
-    }
-
-    .mono {
-      font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-      font-size: 12px;
-      color: var(--muted);
+    .notice-banner.tone-warning {
+      background-color: rgba(251, 146, 60, 0.1);
+      border-color: rgba(251, 146, 60, 0.4);
+      color: #fb923c;
     }
 
     .empty {
-      padding: 20px;
-      border-radius: var(--radius-sm);
-      border: 1px dashed rgba(255, 255, 255, 0.1);
-      color: var(--muted);
-      background: transparent;
+      color: var(--md-sys-color-outline);
+      font-size: 13px;
       text-align: center;
-      font-size: 13px;
+      padding: 24px;
+      border: 1px dashed var(--md-sys-color-outline-variant);
+      border-radius: 12px;
     }
 
-    .button {
-      display: inline-flex;
-      justify-content: center;
-      align-items: center;
-      gap: 8px;
-      min-height: 42px;
-      padding: 10px 20px;
-      border-radius: var(--radius-xs);
-      border: 1px solid transparent;
-      font: inherit;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      text-decoration: none;
-      transition: all 0.2s ease;
-      position: relative;
-      overflow: hidden;
+    .mono {
+      font-family: monospace;
     }
 
-    .button:hover:not(:disabled) {
-      transform: translateY(-1px);
+    /* Custom Dialog Content */
+    #mergeDialog p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--md-sys-color-on-surface);
     }
 
-    .button:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
-    .button:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-
-    .button-primary {
-      color: #0b0f1a;
-      background: linear-gradient(135deg, var(--accent), #34d399);
-      box-shadow: 0 4px 20px rgba(110, 231, 183, 0.25);
-    }
-
-    .button-primary:hover:not(:disabled) {
-      box-shadow: 0 8px 30px rgba(110, 231, 183, 0.35);
-    }
-
-    .button-google {
-      color: #fff;
-      background: linear-gradient(135deg, #ea4335, #d33426);
-      box-shadow: 0 4px 20px var(--google-glow);
-    }
-
-    .button-google:hover:not(:disabled) {
-      box-shadow: 0 8px 30px rgba(234, 67, 53, 0.35);
-    }
-
-    .button-discord {
-      color: #fff;
-      background: linear-gradient(135deg, #5865f2, #4752c4);
-      box-shadow: 0 4px 20px var(--discord-glow);
-    }
-
-    .button-discord:hover:not(:disabled) {
-      box-shadow: 0 8px 30px rgba(88, 101, 242, 0.35);
-    }
-
-    .button-ghost {
-      background: transparent;
-      border-color: var(--line-strong);
-      color: var(--ink-secondary);
-    }
-
-    .button-ghost:hover:not(:disabled) {
-      background: var(--surface-hover);
-      color: var(--ink);
-    }
-
-    .button-danger {
-      color: #fff;
-      background: linear-gradient(135deg, #ef4444, #dc2626);
-      box-shadow: 0 4px 20px rgba(239, 68, 68, 0.2);
-    }
-
-    .button-danger:hover:not(:disabled) {
-      box-shadow: 0 8px 30px rgba(239, 68, 68, 0.3);
-    }
-
-    .subtle {
-      font-size: 13px;
-      color: var(--muted);
-    }
-
-    @media (max-width: 980px) {
-
-      .hero,
-      .grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 680px) {
-      .shell {
-        width: calc(100% - 24px);
-        padding-top: 24px;
-      }
-
-      .hero,
-      .panel {
-        padding: 20px;
-      }
-
-      .hero {
-        gap: 16px;
-      }
-
-      .metrics {
-        grid-template-columns: 1fr;
-      }
-
-      .identity-head,
-      .device-head {
-        align-items: start;
-        flex-direction: column;
-      }
-
-      h1 {
-        font-size: 28px;
-      }
+    md-list-item {
+      --md-list-item-hover-state-layer-color: rgba(255, 255, 255, 0.05);
+      --md-list-item-label-text-color: var(--md-sys-color-on-surface);
+      --md-list-item-supporting-text-color: var(--md-sys-color-outline);
     }
   </style>
 </head>
 
 <body>
-  <main class="shell">
-    <section class="hero">
-      <div class="hero-aside">
-        <div class="badge" id="heroBadge">尚未登入</div>
-        <button class="button button-ghost" type="button" id="logoutButton">登出</button>
+  <header>
+    <div class="header-title-section">
+      <h1 class="md-typescale-title-large" style="font-weight:700;">YABus 帳戶中心</h1>
+      <md-assist-chip id="heroBadge" label="尚未登入"></md-assist-chip>
+    </div>
+    <div class="header-actions">
+      <md-outlined-button id="refreshButton">
+        <md-icon slot="icon">refresh</md-icon>
+        重新整理
+      </md-outlined-button>
+      <md-outlined-button id="logoutButton">
+        <md-icon slot="icon">logout</md-icon>
+        登出
+      </md-outlined-button>
+    </div>
+  </header>
+
+  <md-linear-progress id="loader" style="width: 100%; display: none;" indeterminate></md-linear-progress>
+
+  <main class="container">
+    <div id="noticeBanner" style="display: none;"></div>
+
+    <!-- Admin portal links -->
+    <div id="adminNavContainer" style="display: none;" class="m3-card">
+      <h2 class="m3-card-title md-typescale-title-medium">
+        <md-icon>admin_panel_settings</md-icon>
+        管理員工具
+      </h2>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+        <md-filled-button id="btnAdminFeedbacks">
+          <md-icon slot="icon">inbox</md-icon>
+          意見回饋
+        </md-filled-button>
+        <md-filled-button id="btnAdminAnnouncements">
+          <md-icon slot="icon">campaign</md-icon>
+          公告管理
+        </md-filled-button>
+        <md-filled-button id="btnAdminUsers">
+          <md-icon slot="icon">manage_accounts</md-icon>
+          用戶管理
+        </md-filled-button>
       </div>
-    </section>
+    </div>
 
-    <section class="panel notice notice-info" id="noticePanel" hidden></section>
-
-    <section class="grid" id="dashboard">
-      <section class="panel">
-        <div class="panel-header">
-          <h2>帳戶資訊</h2>
-        </div>
-        <div class="metrics" id="accountMetrics"></div>
-        <div class="top-actions">
-          <button class="button button-primary" type="button" id="refreshButton">重新整理</button>
-          <button class="button button-google" type="button" id="linkGoogleButton">連結 Google</button>
-          <button class="button button-discord" type="button" id="linkDiscordButton">連結 Discord</button>
-          <button class="button button-danger" type="button" id="logoutAllButton">登出所有裝置</button>
+    <div class="grid-2">
+      <section class="m3-card">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>account_circle</md-icon>
+          帳戶資訊
+        </h2>
+        <div class="metrics-grid" id="accountMetrics"></div>
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
+          <md-filled-button id="linkGoogleButton">連結 Google</md-filled-button>
+          <md-filled-button id="linkDiscordButton">連結 Discord</md-filled-button>
+          <md-outlined-button id="logoutAllButton" style="--md-outlined-button-outline-color: var(--md-sys-color-error); --md-outlined-button-label-text-color: var(--md-sys-color-error);">
+            登出所有裝置
+          </md-outlined-button>
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>已連結身份</h2>
-        </div>
-        <div class="identity-list" id="identityList"></div>
+      <section class="m3-card">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>link</md-icon>
+          已連結身份
+        </h2>
+        <div id="identityList" style="display: flex; flex-direction: column;"></div>
       </section>
+    </div>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>目前裝置</h2>
-        </div>
+    <div class="grid-2">
+      <section class="m3-card">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>smartphone</md-icon>
+          目前裝置
+        </h2>
         <div id="currentDevice"></div>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>已登入裝置</h2>
-        </div>
-        <div class="device-list" id="deviceList"></div>
+      <section class="m3-card">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>devices</md-icon>
+          已登入裝置
+        </h2>
+        <div id="deviceList" style="display: flex; flex-direction: column;"></div>
       </section>
-    </section>
+    </div>
   </main>
+
+  <!-- M3 Dialog for merging prompt -->
+  <md-dialog id="mergeDialog">
+    <div slot="headline">帳號合併確認</div>
+    <form slot="content" id="mergeDialogContent" method="dialog"></form>
+    <div slot="actions">
+      <md-text-button id="cancelMergeButton" value="cancel">取消</md-text-button>
+      <md-filled-button id="confirmMergeButton" value="confirm" style="--md-filled-button-container-color: var(--md-sys-color-error); --md-filled-button-label-text-color: #ffffff;">
+        確認合併並刪除
+      </md-filled-button>
+    </div>
+  </md-dialog>
 
   <script>
     const AUTH_TOKEN_COOKIE_NAME = "yabus_auth_token";
@@ -690,7 +444,7 @@
     }
 
     function providerClass(provider) {
-      return provider === "google" ? "pill-google" : provider === "discord" ? "pill-discord" : "";
+      return provider === "google" ? "google-badge" : provider === "discord" ? "discord-badge" : "";
     }
 
     function formatTime(epochSeconds) {
@@ -742,7 +496,13 @@
 
     function setBusy(value) {
       state.busy = value;
-      render();
+      const loader = document.getElementById("loader");
+      if (value) {
+        loader.style.display = "block";
+      } else {
+        loader.style.display = "none";
+      }
+      renderButtons();
     }
 
     function setNotice(tone, title, message) {
@@ -907,6 +667,9 @@
       if (!state.session || !state.session.token) {
         return;
       }
+      if (!confirm("確定要登出所有裝置嗎？這會清除此裝置與其他所有工作階段。")) {
+        return;
+      }
       setBusy(true);
       try {
         await requestJson("/api/v1/auth/logout-all", {
@@ -928,43 +691,45 @@
     function renderHeroBadge() {
       const badge = document.getElementById("heroBadge");
       if (!state.session || !state.session.token) {
-        badge.textContent = "尚未登入";
+        badge.setAttribute("label", "尚未登入");
         return;
       }
-      badge.textContent = `${providerLabel(state.session.provider)} / ${state.session.displayName || "已登入"}`;
+      badge.setAttribute("label", `${providerLabel(state.session.provider)} / ${state.session.displayName || "已登入"}`);
     }
 
     function renderNotice() {
-      const panel = document.getElementById("noticePanel");
+      const banner = document.getElementById("noticeBanner");
+      const mergeDialog = document.getElementById("mergeDialog");
+
       if (state.mergePreview) {
-        const identities = (state.mergePreview.source_identities || [])
-          .map((identity) => providerLabel(identity.provider))
-          .join(" , ");
-        panel.hidden = false;
-        panel.className = "panel notice notice-warning";
-        panel.innerHTML = [
-          `<h2>這個 ${escapeHtml(providerLabel(state.mergePreview.provider))} 已經掛在別的帳號上</h2>`,
-          `<p>確認後，來源帳號 <span class="mono">${escapeHtml(state.mergePreview.source_account_id)}</span> 會被刪除。</p>`,
-          `<p>來源帳號目前還有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份、${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台仍登入中的裝置。</p>`,
-          `<div class="notice-actions"><button class="button button-danger" type="button" id="confirmMergeButton">確認連結並刪除來源帳號</button><button class="button button-ghost" type="button" id="cancelMergeButton">取消</button></div>`,
-        ].join("");
-        document.getElementById("confirmMergeButton").addEventListener("click", confirmMerge);
-        document.getElementById("cancelMergeButton").addEventListener("click", clearNotice);
+        const dialogContent = document.getElementById("mergeDialogContent");
+        dialogContent.innerHTML = `
+          <p style="margin-bottom: 12px;">這個 <strong>${escapeHtml(providerLabel(state.mergePreview.provider))}</strong> 帳號已經掛在別的 YABus 帳號上。</p>
+          <p style="margin-bottom: 12px; color: var(--md-sys-color-error); font-weight: 500;">
+            注意：若選擇合併，來源帳號 <span class="mono">${escapeHtml(state.mergePreview.source_account_id)}</span> 將會被永久刪除。
+          </p>
+          <p>
+            該來源帳號目前有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份，且有 ${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台登入中的裝置。
+          </p>
+        `;
+        mergeDialog.show();
         return;
+      } else {
+        mergeDialog.close();
       }
 
       if (!state.notice) {
-        panel.hidden = true;
-        panel.innerHTML = "";
+        banner.style.display = "none";
+        banner.innerHTML = "";
         return;
       }
 
-      panel.hidden = false;
-      panel.className = `panel notice notice-${state.notice.tone}`;
-      panel.innerHTML = [
-        `<h2>${escapeHtml(state.notice.title)}</h2>`,
-        `<p>${escapeHtml(state.notice.message)}</p>`,
-      ].join("");
+      banner.style.display = "block";
+      banner.className = `notice-banner tone-${state.notice.tone}`;
+      banner.innerHTML = `
+        <strong style="display: block; margin-bottom: 4px;">${escapeHtml(state.notice.title)}</strong>
+        <div>${escapeHtml(state.notice.message)}</div>
+      `;
     }
 
     function renderAccountMetrics() {
@@ -982,9 +747,9 @@
       ];
 
       root.innerHTML = metrics.map(([label, value]) => `
-        <article class="metric">
-          <strong>${escapeHtml(label)}</strong>
-          <span>${escapeHtml(value || "-")}</span>
+        <article class="metric-item">
+          <div class="metric-label">${escapeHtml(label)}</div>
+          <div class="metric-value">${escapeHtml(value || "-")}</div>
         </article>
       `).join("");
     }
@@ -993,19 +758,28 @@
       const root = document.getElementById("identityList");
       const identities = state.account && Array.isArray(state.account.identities) ? state.account.identities : [];
       if (!identities.length) {
-        root.innerHTML = '<div class="empty">空空如也</div>';
+        root.innerHTML = '<div class="empty">尚未連結任何 OAuth 身分。</div>';
         return;
       }
-      root.innerHTML = identities.map((identity) => `
-        <article class="identity">
-          <div class="identity-head">
-            <h3>${escapeHtml(identity.display_name || providerLabel(identity.provider))}</h3>
-            <span class="pill ${providerClass(identity.provider)}">${escapeHtml(providerLabel(identity.provider))}</span>
-          </div>
-          <p>${escapeHtml(identity.email || "沒有 email")}</p>
-          <p class="mono">${escapeHtml(identity.provider_user_id || "-")}</p>
-        </article>
-      `).join("");
+      root.innerHTML = `
+        <md-list style="background: transparent; padding: 0;">
+          ${identities.map((identity) => {
+            const provider = identity.provider;
+            const icon = provider === "google" ? "mail" : "forum";
+            return `
+              <md-list-item style="--md-list-item-hover-state-layer-color: transparent;">
+                <span slot="headline">${escapeHtml(identity.display_name || providerLabel(identity.provider))}</span>
+                <span slot="supporting-text">${escapeHtml(identity.email || "沒有 email")}</span>
+                <span slot="trailing-supporting-text" style="color: var(--md-sys-color-primary); font-weight: bold;">
+                  ${escapeHtml(providerLabel(identity.provider))}
+                </span>
+                <md-icon slot="start">${icon}</md-icon>
+              </md-list-item>
+              <md-divider></md-divider>
+            `;
+          }).join("")}
+        </md-list>
+      `;
     }
 
     function renderCurrentDevice() {
@@ -1017,35 +791,44 @@
       const device = state.account.device;
       const deviceLabel = device.device_name ? `${escapeHtml(device.device_name)}（這台裝置）` : "這台裝置";
       root.innerHTML = `
-        <article class="device">
-          <div class="device-head">
-            <h3>${deviceLabel}</h3>
-          </div>
-          <p class="mono">${escapeHtml(maskDeviceKey(device.device_key))}</p>
-          <p>建立：${escapeHtml(formatTime(device.created_at))}</p>
-          <p>最近使用：${escapeHtml(formatTime(device.last_seen_at))}</p>
-        </article>
+        <md-list style="background: transparent; padding: 0;">
+          <md-list-item style="--md-list-item-hover-state-layer-color: transparent;">
+            <span slot="headline">${deviceLabel}</span>
+            <span slot="supporting-text">
+              金鑰：${escapeHtml(maskDeviceKey(device.device_key))}<br>
+              建立：${escapeHtml(formatTime(device.created_at))}<br>
+              最近活動：${escapeHtml(formatTime(device.last_seen_at))}
+            </span>
+            <md-icon slot="start">smartphone</md-icon>
+          </md-list-item>
+        </md-list>
       `;
     }
 
     function renderDevices() {
       const root = document.getElementById("deviceList");
       if (!state.devices.length) {
-        root.innerHTML = '<div class="empty">空空如也</div>';
+        root.innerHTML = '<div class="empty">尚未登入其他裝置。</div>';
         return;
       }
-      root.innerHTML = state.devices.map((device) => `
-        <article class="device">
-          <div class="device-head">
-            <h3>${escapeHtml(device.device_name || "未知裝置")}</h3>
-            ${device.is_current ? "<span class='pill'>目前裝置</span>" : ""}
-          </div>
-          <p class="mono">${escapeHtml(maskDeviceKey(device.device_key))}</p>
-          <p>裝置 ID：${escapeHtml(device.device_id)}</p>
-          <p>登入時間：${escapeHtml(formatTime(device.token_created_at))}</p>
-          <p>最近活動：${escapeHtml(formatTime(device.token_last_used_at || device.last_seen_at))}</p>
-        </article>
-      `).join("");
+      root.innerHTML = `
+        <md-list style="background: transparent; padding: 0;">
+          ${state.devices.map((device) => {
+            const isCurrent = device.is_current;
+            return `
+              <md-list-item style="--md-list-item-hover-state-layer-color: transparent;">
+                <span slot="headline">${escapeHtml(device.device_name || "未知裝置")} ${isCurrent ? "（目前裝置）" : ""}</span>
+                <span slot="supporting-text">
+                  金鑰：${escapeHtml(maskDeviceKey(device.device_key))}<br>
+                  最近活動：${escapeHtml(formatTime(device.token_last_used_at || device.last_seen_at))}
+                </span>
+                <md-icon slot="start">devices</md-icon>
+              </md-list-item>
+              <md-divider></md-divider>
+            `;
+          }).join("")}
+        </md-list>
+      `;
     }
 
     function renderButtons() {
@@ -1075,6 +858,13 @@
       renderCurrentDevice();
       renderDevices();
       renderButtons();
+
+      const adminNav = document.getElementById("adminNavContainer");
+      if (state.account && (state.account.role === "admin" || state.account.role === "mod")) {
+        adminNav.style.display = "flex";
+      } else {
+        adminNav.style.display = "none";
+      }
     }
 
     document.getElementById("refreshButton").addEventListener("click", refreshData);
@@ -1082,6 +872,21 @@
     document.getElementById("linkDiscordButton").addEventListener("click", () => startLink("discord"));
     document.getElementById("logoutButton").addEventListener("click", logoutCurrentDevice);
     document.getElementById("logoutAllButton").addEventListener("click", logoutAllDevices);
+
+    // Dialog action listeners
+    document.getElementById("confirmMergeButton").addEventListener("click", async () => {
+      document.getElementById("mergeDialog").close();
+      await confirmMerge();
+    });
+    document.getElementById("cancelMergeButton").addEventListener("click", () => {
+      document.getElementById("mergeDialog").close();
+      clearNotice();
+    });
+
+    // Navigation setup
+    document.getElementById("btnAdminFeedbacks").addEventListener("click", () => window.location.href = "/admin/feedbacks");
+    document.getElementById("btnAdminAnnouncements").addEventListener("click", () => window.location.href = "/admin/announcements");
+    document.getElementById("btnAdminUsers").addEventListener("click", () => window.location.href = "/admin/user_manage");
 
     ensureDeviceKey();
     render();
