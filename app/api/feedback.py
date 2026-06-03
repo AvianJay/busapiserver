@@ -10,10 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.auth_service import generate_snowflake
 from app.db import get_connection
+from app.discord_webhook import notify_new_feedback
+from app.logging_utils import get_logger
 from app.rate_limit import check_rate_limit, enforce_rate_limit, get_request_principal
 from app.request_analytics import MAX_USER_AGENT_LENGTH, parse_user_agent
 
 
+LOGGER = get_logger("feedback")
 router = APIRouter(tags=["feedback"], dependencies=[Depends(enforce_rate_limit)])
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 _FEEDBACK_LIMIT_REQUESTS = 1
@@ -104,6 +107,24 @@ def create_feedback(request: Request, payload: FeedbackCreateRequest) -> dict[st
             ),
         )
         connection.commit()
+
+    # Best-effort Discord notification. Carries only metadata (never the raw
+    # user-submitted title/content) and must never break the API response.
+    try:
+        notify_new_feedback(
+            settings,
+            feedback_id=feedback_id,
+            account_id=principal.account_id,
+            account_role=getattr(principal, "role", None),
+            created_at=now,
+            title_length=len(payload.title),
+            content_length=len(payload.content),
+            client_family=parsed_user_agent.client_family,
+            platform_name=parsed_user_agent.platform_name,
+            app_version=parsed_user_agent.app_version,
+        )
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning("failed to send discord feedback notification: %s", exc)
 
     return {
         "ok": True,

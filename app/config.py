@@ -148,6 +148,10 @@ class Settings:
     account_sync_max_favorites: int = 25
     account_sync_max_group_name_length: int = 120
     account_sync_max_json_depth: int = 16
+    # Optional Discord webhook for new-feedback notifications. The notification
+    # intentionally contains only metadata and an admin link, never the raw
+    # user-submitted title/content, so malicious input cannot reach Discord.
+    feedback_discord_webhook_url: str | None = None
     # Application database (auth, analytics, announcements, feedback, account
     # sync). Independent of the static route database so the weekly static sync
     # never touches it. When not provided, it defaults to "app.db" next to db_path.
@@ -238,6 +242,9 @@ class Settings:
             fcm_web_vapid_key=os.getenv("FCM_WEB_VAPID_KEY", "").strip(),
             account_sync_max_payload_bytes=int(
                 os.getenv("ACCOUNT_SYNC_MAX_PAYLOAD_BYTES", str(512 * 1024))
+            ),
+            feedback_discord_webhook_url=(
+                os.getenv("FEEDBACK_DISCORD_WEBHOOK_URL", "").strip() or None
             ),
             account_sync_max_favorites=int(
                 os.getenv("ACCOUNT_SYNC_MAX_FAVORITES", "25")
