@@ -9,7 +9,7 @@ import time
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists, route_exists
 from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME, guess_city_from_routeid
@@ -314,6 +314,12 @@ def _load_nearby_stops(
 
     results.sort(key=lambda item: item["distance"])
     return results[:limit]
+
+
+@router.get("/")
+def root() -> dict:
+    # redirect to main app
+    return RedirectResponse(url="https://busapp.avianjay.sbs/")
 
 
 @router.get("/downloads/bus.db")
