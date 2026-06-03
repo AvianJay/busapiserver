@@ -742,3 +742,92 @@ def get_route_schedule(routeid: str, request: Request) -> list[dict]:
         }
         for row in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Taiwan holiday calendar
+# ---------------------------------------------------------------------------
+
+import json as _holiday_json
+from functools import lru_cache
+from pathlib import Path as _Path
+
+_HOLIDAYS_FILE = _Path(__file__).resolve().parent.parent / "data" / "holidays.json"
+
+
+@lru_cache(maxsize=1)
+def _load_holidays_data() -> dict:
+    """Loads and caches the bundled Taiwan holiday calendar JSON.
+
+    The file is manually maintained (see app/data/holidays.json). Returns an
+    empty structure if the file is missing or invalid so the endpoint never
+    crashes.
+    """
+    try:
+        with _HOLIDAYS_FILE.open("r", encoding="utf-8") as handle:
+            data = _holiday_json.load(handle)
+        if isinstance(data, dict) and isinstance(data.get("holidays"), dict):
+            return data
+    except FileNotFoundError:
+        LOGGER.warning("holidays.json not found at %s", _HOLIDAYS_FILE)
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.exception("failed to load holidays.json: %s", exc)
+    return {"holidays": {}}
+
+
+@router.get("/api/v1/holidays")
+def get_holidays(
+    request: Request,
+    year: int | None = Query(default=None, description="Filter by year, e.g. 2026"),
+    date: str | None = Query(
+        default=None, description="Filter by a single date in YYYY-MM-DD"
+    ),
+) -> dict:
+    """Returns the Taiwan national holiday calendar.
+
+    - No params: returns all known holiday entries grouped by year.
+    - ?year=2026: returns only that year's entries.
+    - ?date=2026-02-18: returns a single object describing whether the date is
+      a holiday (or make-up working day). Dates without an explicit entry fall
+      back to the weekend rule (Sat/Sun = holiday).
+    """
+    data = _load_holidays_data()
+    holidays_by_year: dict = data.get("holidays", {})
+
+    if date is not None:
+        try:
+            parsed = datetime.strptime(date.strip(), "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid date format, expected YYYY-MM-DD")
+        year_key = str(parsed.year)
+        entry = None
+        for item in holidays_by_year.get(year_key, []):
+            if isinstance(item, dict) and item.get("date") == parsed.isoformat():
+                entry = item
+                break
+        if entry is not None:
+            is_holiday = bool(entry.get("isHoliday", True))
+            name = entry.get("name")
+        else:
+            # No explicit entry: weekend dates are holidays, weekdays are not.
+            is_weekend = parsed.weekday() >= 5  # 5=Sat, 6=Sun
+            is_holiday = is_weekend
+            name = None
+        return {
+            "date": parsed.isoformat(),
+            "isHoliday": is_holiday,
+            "name": name,
+        }
+
+    if year is not None:
+        return {
+            "year": year,
+            "holidays": holidays_by_year.get(str(year), []),
+        }
+
+    return {
+        "source": data.get("source"),
+        "updated": data.get("updated"),
+        "note": data.get("note"),
+        "holidays": holidays_by_year,
+    }
