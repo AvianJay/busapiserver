@@ -745,6 +745,193 @@ def get_route_schedule(routeid: str, request: Request) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Stop estimated times (frequency trips extrapolated via travel-time data)
+# ---------------------------------------------------------------------------
+
+def _estimate_stop_times_for_frequency(
+    connection,
+    routeid: str,
+    direction: int,
+    freq_payload: dict,
+) -> list[dict] | None:
+    """Attempts to build estimated per-stop times for a frequency entry.
+
+    Uses the *stop_travel_times* table to compute cumulative travel time
+    from the first stop.  ETA-sourced travel times (``source = 'eta'``)
+    are preferred over timetable-derived ones because they reflect
+    real-world conditions.  Returns a list of ``{seq, stopid, arrival,
+    departure, estimated}`` dicts, or *None* if the route has insufficient
+    travel-time data (e.g.  a route that never had any timetable entries
+    and has not yet been observed with live buses).
+
+    The *freq_payload* dict must contain ``start`` (HH:MM first-bus time).
+    """
+    import json as _json
+
+    # 1. Fetch ordered stops for this route+direction.
+    stops_rows = connection.execute(
+        """
+        SELECT seq, stopid
+        FROM stops
+        WHERE routeid = ? AND pathid = ?
+        ORDER BY seq
+        """,
+        (routeid, direction),
+    ).fetchall()
+    if len(stops_rows) < 2:
+        return None
+
+    # 2. Fetch travel-time segments, preferring ETA-sourced data.
+    # For each (from_seq, to_seq) pair, if an 'eta' row exists use it;
+    # otherwise fall back to the 'timetable' row.
+    tt_rows = connection.execute(
+        """
+        SELECT from_seq, to_seq, avg_seconds, source
+        FROM stop_travel_times
+        WHERE routeid = ? AND direction = ?
+        """,
+        (routeid, direction),
+    ).fetchall()
+    if not tt_rows:
+        return None
+
+    # Build seg_map: prefer 'eta' over 'timetable' for the same segment.
+    seg_map: dict[tuple[int, int], float] = {}
+    seg_source: dict[tuple[int, int], str] = {}
+    for r in tt_rows:
+        key = (r["from_seq"], r["to_seq"])
+        source = r["source"]
+        # Prefer eta over timetable.
+        if key not in seg_map or source == "eta":
+            seg_map[key] = r["avg_seconds"]
+            seg_source[key] = source
+
+    # 3. Walk the stop list and accumulate travel time from the first stop.
+    start_str = (freq_payload.get("start") or "").strip()
+    if not start_str:
+        return None
+    base_minutes = _time_str_to_minutes_api(start_str)
+    if base_minutes is None:
+        return None
+
+    has_eta_source = any(s == "eta" for s in seg_source.values())
+
+    result: list[dict] = []
+    cumulative_seconds = 0.0
+    prev_seq: int | None = None
+    covered = True
+
+    for stop in stops_rows:
+        seq = stop["seq"]
+        if prev_seq is not None:
+            seg = seg_map.get((prev_seq, seq))
+            if seg is not None:
+                cumulative_seconds += seg
+            else:
+                covered = False
+
+        total_minutes = base_minutes + cumulative_seconds / 60.0
+        # Handle cross-midnight wrap
+        if total_minutes >= 1440:
+            total_minutes -= 1440
+        hh = int(total_minutes) // 60
+        mm = int(total_minutes) % 60
+        time_str = f"{hh:02d}:{mm:02d}"
+
+        result.append({
+            "seq": seq,
+            "stopid": stop["stopid"],
+            "arrival": time_str,
+            "departure": time_str,
+            "estimated": True,
+        })
+        prev_seq = seq
+
+    # If any gaps existed, still return partial results – each entry has
+    # `estimated: True` so the client can display a caveat.
+    return result if result else None
+
+
+def _time_str_to_minutes_api(time_str: str) -> float | None:
+    """Converts 'HH:MM' to minutes since midnight."""
+    if not time_str:
+        return None
+    parts = time_str.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]) * 60.0 + int(parts[1])
+    except (ValueError, IndexError):
+        return None
+
+
+@router.get("/api/v1/routes/{routeid}/stop-estimated-times")
+def get_stop_estimated_times(routeid: str, request: Request) -> dict:
+    """Returns per-stop estimated arrival/departure times for a route.
+
+    For timetable entries the actual times from the TDX StopTimes are
+    returned (with ``estimated: false``).  For frequency entries the API
+    attempts to extrapolate per-stop times using the *stop_travel_times*
+    table; if that fails (no travel-time data) the frequency entry keeps
+    its original payload (no per-stop times).
+
+    The response format mirrors the schedule endpoint but adds an
+    ``estimated`` boolean to each stop_time entry.
+    """
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT subroute_uid, direction, kind, seq, service_days, payload
+            FROM route_schedules
+            WHERE routeid = ?
+            ORDER BY subroute_uid, direction, kind, seq
+            """,
+            (routeid,),
+        ).fetchall()
+
+    import json as _json
+    entries: list[dict] = []
+    for row in rows:
+        payload = _json.loads(row["payload"])
+        kind = row["kind"]
+
+        if kind == "timetable":
+            # Mark existing stop_times as authoritative (not estimated).
+            stop_times = payload.get("stop_times") or []
+            for st in stop_times:
+                st["estimated"] = False
+            entries.append({
+                "subroute_uid": row["subroute_uid"],
+                "direction": row["direction"],
+                "kind": kind,
+                "seq": row["seq"],
+                "service_days": _json.loads(row["service_days"]),
+                "payload": payload,
+            })
+        elif kind == "frequency":
+            # Try to extrapolate per-stop times.
+            direction = row["direction"]
+            with get_connection(settings.db_path) as conn:
+                estimated_stops = _estimate_stop_times_for_frequency(
+                    conn, routeid, direction, payload,
+                )
+            if estimated_stops is not None:
+                payload["stop_times"] = estimated_stops
+                payload["has_estimated_stops"] = True
+            entries.append({
+                "subroute_uid": row["subroute_uid"],
+                "direction": row["direction"],
+                "kind": kind,
+                "seq": row["seq"],
+                "service_days": _json.loads(row["service_days"]),
+                "payload": payload,
+            })
+
+    return {"routeid": routeid, "entries": entries}
+
+
+# ---------------------------------------------------------------------------
 # Taiwan holiday calendar
 # ---------------------------------------------------------------------------
 

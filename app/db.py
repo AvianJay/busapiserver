@@ -90,6 +90,21 @@ CREATE TABLE IF NOT EXISTS route_schedules (
 
 CREATE INDEX IF NOT EXISTS idx_route_schedules_routeid ON route_schedules(routeid);
 
+CREATE TABLE IF NOT EXISTS stop_travel_times (
+    routeid       TEXT NOT NULL,
+    direction     INTEGER NOT NULL DEFAULT 0,
+    from_seq      INTEGER NOT NULL,
+    to_seq        INTEGER NOT NULL,
+    avg_seconds   REAL NOT NULL,
+    sample_count  INTEGER NOT NULL DEFAULT 1,
+    source        TEXT NOT NULL DEFAULT 'timetable'
+                   CHECK (source IN ('timetable', 'eta')),
+    PRIMARY KEY (routeid, direction, from_seq, to_seq, source),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_stop_travel_times_routeid ON stop_travel_times(routeid);
+
 CREATE TABLE IF NOT EXISTS tdx_fetch_state (
     resource_key    TEXT PRIMARY KEY,
     last_modified   TEXT,

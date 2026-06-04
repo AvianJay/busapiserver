@@ -945,6 +945,97 @@ def _sync_route_schedules(
             )
 
 
+def _compute_and_store_travel_times(
+    connection,
+    schedules_raw: list[dict],
+    static_route_ids: set[str],
+    *,
+    table_name: str = "stop_travel_times",
+    routeid_mapper: Callable[[str], str] | None = None,
+) -> None:
+    """Derives average inter-stop travel times from timetable StopTimes.
+
+    For each route+direction pair that has timetable entries, the function
+    iterates over all StopTimes and computes the time difference (in seconds)
+    between consecutive stops.  Multiple timetable entries (different service
+    day sets or trips) for the same route+direction are averaged so that the
+    result is robust against outlier schedules.
+
+    The output is stored in the *stop_travel_times* table keyed by
+    ``(routeid, direction, from_seq, to_seq)``.
+    """
+    # Accumulate raw travel-time observations: (routeid, direction, from_seq, to_seq) -> [seconds]
+    observations: dict[tuple[str, int, int, int], list[float]] = {}
+
+    for sched in schedules_raw:
+        route_uid = sched.get("SubRouteUID") or sched.get("RouteUID")
+        if not route_uid:
+            continue
+        mapped_routeid = routeid_mapper(route_uid) if routeid_mapper else route_uid
+        if mapped_routeid not in static_route_ids:
+            continue
+
+        direction = int(sched.get("Direction") or 0)
+
+        for tt in sched.get("Timetables") or []:
+            stop_times = tt.get("StopTimes") or []
+            if len(stop_times) < 2:
+                continue
+
+            # Parse times and build a (seq, minutes-since-midnight) list.
+            parsed: list[tuple[int, float]] = []
+            for st in stop_times:
+                seq = st.get("StopSequence")
+                if seq is None:
+                    continue
+                time_str = (st.get("DepartureTime") or st.get("ArrivalTime") or "").strip()
+                minutes = _time_str_to_minutes(time_str)
+                if minutes is None:
+                    continue
+                parsed.append((int(seq), minutes))
+
+            parsed.sort(key=lambda p: p[0])
+            for i in range(len(parsed) - 1):
+                from_seq, from_min = parsed[i]
+                to_seq, to_min = parsed[i + 1]
+                diff = to_min - from_min
+                if diff < 0:
+                    # Cross-midnight (e.g. 23:50 -> 00:10)
+                    diff += 24 * 60
+                if diff > 180:
+                    # Skip unreasonable gaps (> 3 hours between adjacent stops)
+                    continue
+                key = (mapped_routeid, direction, from_seq, to_seq)
+                observations.setdefault(key, []).append(diff * 60.0)  # store as seconds
+
+    # Compute averages and persist.
+    for (routeid, direction, from_seq, to_seq), secs_list in observations.items():
+        avg_seconds = sum(secs_list) / len(secs_list)
+        connection.execute(
+            f"""
+            INSERT OR REPLACE INTO {table_name}
+                (routeid, direction, from_seq, to_seq, avg_seconds, sample_count, source)
+            VALUES (?, ?, ?, ?, ?, ?, 'timetable')
+            """,
+            (routeid, direction, from_seq, to_seq, avg_seconds, len(secs_list)),
+        )
+
+
+def _time_str_to_minutes(time_str: str) -> float | None:
+    """Converts 'HH:MM' (or 'HH:MM:SS') to minutes since midnight."""
+    if not time_str:
+        return None
+    parts = time_str.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        return hours * 60.0 + minutes
+    except (ValueError, IndexError):
+        return None
+
+
 def _persist_fetch_state(
     connection,
     city: str,
@@ -1167,6 +1258,16 @@ def sync_static(
                             set(static_routes),
                             table_name="route_schedules",
                         )
+                        connection.execute(
+                            "DELETE FROM stop_travel_times WHERE routeid LIKE ? AND source = 'timetable'",
+                            (f"{prefix}%",),
+                        )
+                        _compute_and_store_travel_times(
+                            connection,
+                            schedules_raw,
+                            set(static_routes),
+                            table_name="stop_travel_times",
+                        )
 
                 if prefix:
                     _write_city_db_from_main(
@@ -1328,6 +1429,17 @@ def sync_static(
                         inter_schedules_raw,
                         set(merged_inter_routes),
                         table_name="route_schedules",
+                        routeid_mapper=to_intercity_routeid,
+                    )
+                    connection.execute(
+                        "DELETE FROM stop_travel_times WHERE routeid LIKE ? AND source = 'timetable'",
+                        (f"{INTERCITY_PREFIX}%",),
+                    )
+                    _compute_and_store_travel_times(
+                        connection,
+                        inter_schedules_raw,
+                        set(merged_inter_routes),
+                        table_name="stop_travel_times",
                         routeid_mapper=to_intercity_routeid,
                     )
 

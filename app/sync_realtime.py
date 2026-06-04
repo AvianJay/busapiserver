@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from pathlib import Path
 
 from app.config import INTERCITY_CITY_NAME, Settings, get_settings, guess_city_from_routeid, to_intercity_routeid
 from app.db import (
@@ -286,6 +287,126 @@ def _collect_plate_observations(
         )
 
     return observations
+
+
+def _extract_and_store_eta_travel_times(
+    snapshot: dict[str, Any],
+    static_route: dict[str, Any],
+    db_path: str | Path,
+) -> None:
+    """Derives inter-stop travel times from live ETA observations.
+
+    When a bus is physically on the road, TDX provides an ETA (seconds
+    until arrival) for every stop along its path.  For a single bus
+    (identified by plate number), the difference between two consecutive
+    stops' ETAs gives the travel time between them:
+
+        travel_time(stop_A → stop_B) = ETA_B − ETA_A
+
+    These observations are accumulated into the *stop_travel_times* table
+    alongside the timetable-derived data.  ETA-sourced entries use
+    ``source = 'eta'`` and are preferred over timetable-derived values
+    because they reflect real-world conditions (traffic, dwell times, …).
+
+    The function is called after each successful realtime refresh so that
+    the travel-time database improves continuously.
+    """
+    paths_meta = static_route.get("paths") or {}
+
+    for path_data in snapshot.get("paths") or []:
+        pathid = path_data.get("pathid")
+        if pathid is None:
+            continue
+
+        path_meta = paths_meta.get(pathid)
+        if not path_meta:
+            continue
+        stop_index = path_meta.get("stop_index") or {}
+
+        # Collect per-plate ETA vectors: plate → [(seq, eta_seconds)]
+        plate_etas: dict[str, list[tuple[int, int]]] = {}
+        for stop_data in path_data.get("stops") or []:
+            stopid = stop_data.get("stopid")
+            if not stopid:
+                continue
+            seq_info = stop_index.get(stopid)
+            if not seq_info:
+                continue
+            seq = seq_info.get("seq")
+            if seq is None:
+                continue
+
+            for eta_entry in stop_data.get("etas") or []:
+                if not isinstance(eta_entry, dict):
+                    continue
+                plate = _normalize_plate(eta_entry.get("plate"))
+                eta_val = _to_int_or_none(eta_entry.get("eta"))
+                if plate is None or eta_val is None:
+                    continue
+                plate_etas.setdefault(plate, []).append((int(seq), eta_val))
+
+        # For each plate, sort by seq and compute inter-stop deltas.
+        observations: dict[tuple[str, int, int, int], list[float]] = {}
+        for plate, seq_etas in plate_etas.items():
+            seq_etas.sort(key=lambda x: x[0])
+            for i in range(len(seq_etas) - 1):
+                from_seq, from_eta = seq_etas[i]
+                to_seq, to_eta = seq_etas[i + 1]
+                delta = to_eta - from_eta
+                if delta <= 0 or delta > 180 * 60:
+                    # Skip impossible/unreasonable deltas (> 3h).
+                    continue
+                routeid = snapshot.get("routeid", "")
+                key = (routeid, pathid, from_seq, to_seq)
+                observations.setdefault(key, []).append(float(delta))
+
+        if not observations:
+            continue
+
+        # Persist into stop_travel_times with source='eta'.
+        routeid = snapshot.get("routeid", "")
+        with get_connection(db_path) as connection:
+            with connection:
+                for (rid, direction, from_seq, to_seq), secs_list in observations.items():
+                    avg_seconds = sum(secs_list) / len(secs_list)
+                    sample_count = len(secs_list)
+                    # Check if an ETA-sourced row already exists.
+                    existing = connection.execute(
+                        """
+                        SELECT avg_seconds, sample_count
+                        FROM stop_travel_times
+                        WHERE routeid = ? AND direction = ?
+                          AND from_seq = ? AND to_seq = ?
+                          AND source = 'eta'
+                        """,
+                        (rid, direction, from_seq, to_seq),
+                    ).fetchone()
+                    if existing is not None:
+                        # Merge with existing ETA observation using weighted average.
+                        old_avg = existing["avg_seconds"]
+                        old_count = existing["sample_count"]
+                        total_count = old_count + sample_count
+                        merged_avg = (old_avg * old_count + avg_seconds * sample_count) / total_count
+                        connection.execute(
+                            """
+                            UPDATE stop_travel_times
+                            SET avg_seconds = ?, sample_count = ?
+                            WHERE routeid = ? AND direction = ?
+                              AND from_seq = ? AND to_seq = ?
+                              AND source = 'eta'
+                            """,
+                            (merged_avg, total_count, rid, direction, from_seq, to_seq),
+                        )
+                    else:
+                        connection.execute(
+                            """
+                            INSERT OR REPLACE INTO stop_travel_times
+                                (routeid, direction, from_seq, to_seq,
+                                 avg_seconds, sample_count, source)
+                            VALUES (?, ?, ?, ?, ?, ?, 'eta')
+                            """,
+                            (rid, direction, from_seq, to_seq, avg_seconds, sample_count),
+                        )
 
 
 def _batched_resource_key(kind: str, city: str, routeids: list[str]) -> str:
@@ -594,6 +715,7 @@ class RealtimeService:
         for routeid, static_route in static_routes.items():
             snapshot = self._build_snapshot(routeid, static_route, items_by_route.get(routeid, []))
             self._set_cached(routeid, snapshot)
+            _extract_and_store_eta_travel_times(snapshot, static_route, self.settings.db_path)
 
     def _refresh_city_cache(
         self,
@@ -666,6 +788,7 @@ class RealtimeService:
         for routeid, static_route in static_routes.items():
             snapshot = self._build_snapshot(routeid, static_route, items_by_route.get(routeid, []))
             self._set_cached(routeid, snapshot)
+            _extract_and_store_eta_travel_times(snapshot, static_route, self.settings.db_path)
 
     def _get_single_route_snapshot(
         self,
@@ -696,6 +819,7 @@ class RealtimeService:
             raise
 
         self._set_cached(routeid, snapshot)
+        _extract_and_store_eta_travel_times(snapshot, static_route, self.settings.db_path)
         return snapshot
 
     def _candidate_cities_for_route(self, routeid: str) -> list[str]:
