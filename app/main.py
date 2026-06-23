@@ -140,8 +140,12 @@ async def lifespan(app: FastAPI):
 
     token_manager = TDXTokenManager(settings)
     tdx_client = TDXClient(settings, token_manager)
-    realtime_service = RealtimeService(settings, tdx_client)
     route_buses_service = RouteBusesService(settings, tdx_client)
+    realtime_service = RealtimeService(
+        settings,
+        tdx_client,
+        route_buses_service=route_buses_service,
+    )
     scheduler_stop_event = threading.Event()
     scheduler_thread = threading.Thread(
         target=_run_weekly_static_sync,

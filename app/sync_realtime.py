@@ -4,6 +4,7 @@ import argparse
 from collections import defaultdict
 import hashlib
 import json
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -34,6 +35,10 @@ STOP_STATUS_MESSAGES = {
 
 ARRIVING_VEHICLE_STOP_STATUS = 1
 REALTIME_FETCH_STATE_RETENTION_SECONDS = 86400
+TDX_SOURCE = "tdx"
+BACKFILL_BUSES_SOURCE = "backfill_buses"
+BACKFILL_MAX_STOP_DISTANCE_METERS = 500.0
+BACKFILL_MAX_ANCHOR_STOP_DISTANCE_METERS = 150.0
 LOGGER = get_logger("sync_realtime")
 
 
@@ -168,6 +173,8 @@ def _append_stop_eta(
     plate: str | None,
     eta: int | None,
     is_arriving: bool,
+    source: str = TDX_SOURCE,
+    estimated: bool = False,
 ) -> None:
     if eta is None:
         return
@@ -176,6 +183,8 @@ def _append_stop_eta(
             "plate": plate,
             "eta": eta,
             "is_arriving": is_arriving,
+            "source": source,
+            "estimated": estimated,
         }
     )
 
@@ -194,6 +203,8 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
         plate = _normalize_plate(entry.get("plate"))
         eta = _to_int_or_none(entry.get("eta"))
         is_arriving = bool(entry.get("is_arriving"))
+        source = entry.get("source") if entry.get("source") in {TDX_SOURCE, BACKFILL_BUSES_SOURCE} else TDX_SOURCE
+        estimated = bool(entry.get("estimated"))
         if eta is None:
             continue
 
@@ -202,6 +213,8 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
             "plate": plate,
             "eta": eta,
             "is_arriving": is_arriving,
+            "source": source,
+            "estimated": estimated,
         }
         current = deduped.get(key)
         if current is None:
@@ -211,10 +224,12 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
         current_score = (
             0 if current.get("is_arriving") else 1,
             current.get("eta") if current.get("eta") is not None else 10**9,
+            0 if current.get("source") == TDX_SOURCE else 1,
         )
         candidate_score = (
             0 if candidate.get("is_arriving") else 1,
             candidate.get("eta") if candidate.get("eta") is not None else 10**9,
+            0 if candidate.get("source") == TDX_SOURCE else 1,
         )
         if candidate_score < current_score:
             deduped[key] = candidate
@@ -224,21 +239,128 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
         key=lambda entry: (
             0 if entry.get("is_arriving") else 1,
             entry.get("eta") if entry.get("eta") is not None else 10**9,
+            0 if entry.get("source") == TDX_SOURCE else 1,
             entry.get("plate") or "",
         ),
     )
 
-    if stop_bucket.get("eta") is None:
-        stop_bucket["eta"] = next(
-            (
-                entry.get("eta")
-                for entry in stop_bucket["etas"]
-                if entry.get("eta") is not None
-            ),
-            None,
-        )
-    if stop_bucket.get("eta") is not None:
+    best_eta = next(
+        (
+            entry.get("eta")
+            for entry in stop_bucket["etas"]
+            if entry.get("eta") is not None
+        ),
+        None,
+    )
+    current_eta = _to_int_or_none(stop_bucket.get("eta"))
+    if best_eta is not None and (current_eta is None or best_eta < current_eta):
+        stop_bucket["eta"] = best_eta
+    if _to_int_or_none(stop_bucket.get("eta")) is not None:
         stop_bucket["message"] = ""
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lat = lat2_rad - lat1_rad
+    delta_lon = math.radians(lon2 - lon1)
+    mean_lat = (lat1_rad + lat2_rad) / 2
+    earth_radius = 6371000.0
+    x = delta_lon * math.cos(mean_lat)
+    y = delta_lat
+    return math.hypot(x, y) * earth_radius
+
+
+def _create_stop_bucket(stopid: str) -> dict[str, Any]:
+    return {
+        "stopid": stopid,
+        "eta": None,
+        "message": "",
+        "buses": [],
+        "etas": [],
+    }
+
+
+def _find_nearest_stop(
+    path_meta: dict[str, Any],
+    *,
+    lat: float,
+    lon: float,
+) -> tuple[int, dict[str, Any], float] | None:
+    raw_stops = path_meta.get("stops") or []
+    if not raw_stops:
+        return None
+
+    stops = sorted(
+        (stop for stop in raw_stops if isinstance(stop, dict)),
+        key=lambda stop: (
+            _to_int_or_none(stop.get("seq")) or 10**9,
+            stop.get("stopid") or "",
+        ),
+    )
+    nearest_index = -1
+    nearest_stop: dict[str, Any] | None = None
+    nearest_distance = float("inf")
+    for index, stop in enumerate(stops):
+        stop_lat = _to_float_or_none(stop.get("lat"))
+        stop_lon = _to_float_or_none(stop.get("lon"))
+        if stop_lat is None or stop_lon is None:
+            continue
+        distance = _distance_meters(lat, lon, stop_lat, stop_lon)
+        if distance < nearest_distance:
+            nearest_distance = distance
+            nearest_stop = stop
+            nearest_index = index
+
+    if nearest_stop is None or nearest_index == -1:
+        return None
+    return nearest_index, stops[nearest_index], nearest_distance
+
+
+def _load_travel_time_segments_by_path(
+    db_path: str | Path,
+    routeid: str,
+) -> dict[int, dict[tuple[int, int], int]]:
+    with get_connection(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT direction, from_seq, to_seq, avg_seconds, source
+            FROM stop_travel_times
+            WHERE routeid = ?
+            """,
+            (routeid,),
+        ).fetchall()
+
+    segments_by_path: dict[int, dict[tuple[int, int], int]] = {}
+    segment_sources: dict[int, dict[tuple[int, int], str]] = {}
+    for row in rows:
+        pathid = _to_int_or_none(row["direction"])
+        from_seq = _to_int_or_none(row["from_seq"])
+        to_seq = _to_int_or_none(row["to_seq"])
+        avg_seconds = _to_float_or_none(row["avg_seconds"])
+        source = row["source"] if row["source"] in {"eta", "timetable"} else "timetable"
+        if pathid is None or from_seq is None or to_seq is None or avg_seconds is None:
+            continue
+
+        path_segments = segments_by_path.setdefault(pathid, {})
+        path_segment_sources = segment_sources.setdefault(pathid, {})
+        key = (from_seq, to_seq)
+        if key not in path_segments or (
+            path_segment_sources.get(key) != "eta" and source == "eta"
+        ):
+            path_segments[key] = max(0, int(round(avg_seconds)))
+            path_segment_sources[key] = source
+
+    return segments_by_path
 
 
 def _collect_plate_observations(
@@ -497,10 +619,121 @@ def _build_buses_payload(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(buses_by_plate.values())
 
 
+def _backfill_snapshot_from_buses(
+    *,
+    routeid: str,
+    db_path: str | Path,
+    paths: dict[int, dict[str, Any]],
+    grouped: dict[int, dict[str, dict[str, Any]]],
+    native_plates_by_path: dict[int, set[str]],
+    buses: list[dict[str, Any]],
+) -> None:
+    if not buses:
+        return
+
+    travel_time_segments = _load_travel_time_segments_by_path(db_path, routeid)
+
+    for bus in buses:
+        plate = _normalize_plate(bus.get("id"))
+        pathid = _to_int_or_none(bus.get("direction"))
+        lat = _to_float_or_none(bus.get("lat"))
+        lon = _to_float_or_none(bus.get("lon"))
+        if plate is None or pathid is None or lat is None or lon is None:
+            continue
+        if plate in native_plates_by_path.get(pathid, set()):
+            continue
+
+        path_meta = paths.get(pathid)
+        if not path_meta:
+            continue
+
+        nearest = _find_nearest_stop(path_meta, lat=lat, lon=lon)
+        if nearest is None:
+            continue
+
+        anchor_index, anchor_stop, anchor_distance = nearest
+        if anchor_distance > BACKFILL_MAX_STOP_DISTANCE_METERS:
+            continue
+
+        stopid = anchor_stop.get("stopid")
+        if not stopid:
+            continue
+
+        path_bucket = grouped.setdefault(pathid, {})
+        stop_bucket = path_bucket.setdefault(stopid, _create_stop_bucket(stopid))
+        if all(_normalize_plate(existing.get("id")) != plate for existing in stop_bucket["buses"]):
+            stop_bucket["buses"].append(
+                {"id": plate, "type": "normal", "source": BACKFILL_BUSES_SOURCE}
+            )
+
+        native_plates_by_path.setdefault(pathid, set()).add(plate)
+
+        stop_seq = _to_int_or_none(anchor_stop.get("seq"))
+        if stop_seq is None:
+            continue
+
+        anchor_eta = 0 if anchor_distance <= BACKFILL_MAX_ANCHOR_STOP_DISTANCE_METERS else None
+        if anchor_eta is not None:
+            _append_stop_eta(
+                stop_bucket,
+                plate=plate,
+                eta=anchor_eta,
+                is_arriving=anchor_eta <= 0,
+                source=BACKFILL_BUSES_SOURCE,
+                estimated=True,
+            )
+
+        path_stops = sorted(
+            (stop for stop in path_meta.get("stops") or [] if isinstance(stop, dict)),
+            key=lambda stop: (_to_int_or_none(stop.get("seq")) or 10**9, stop.get("stopid") or ""),
+        )
+        if not path_stops:
+            continue
+
+        segments = travel_time_segments.get(pathid, {})
+        running_eta = anchor_eta
+        previous_seq = stop_seq
+        started = False
+        for stop in path_stops:
+            current_seq = _to_int_or_none(stop.get("seq"))
+            current_stopid = stop.get("stopid")
+            if current_seq is None or not current_stopid:
+                continue
+            if current_seq < stop_seq:
+                continue
+            if current_seq == stop_seq:
+                started = True
+                continue
+            if not started:
+                continue
+
+            segment_seconds = segments.get((previous_seq, current_seq))
+            if segment_seconds is None:
+                break
+
+            running_eta = segment_seconds if running_eta is None else running_eta + segment_seconds
+            current_bucket = path_bucket.setdefault(current_stopid, _create_stop_bucket(current_stopid))
+            _append_stop_eta(
+                current_bucket,
+                plate=plate,
+                eta=running_eta,
+                is_arriving=False,
+                source=BACKFILL_BUSES_SOURCE,
+                estimated=True,
+            )
+            previous_seq = current_seq
+
+
 class RealtimeService:
-    def __init__(self, settings: Settings, client: TDXClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: TDXClient,
+        route_buses_service: "RouteBusesService | None" = None,
+    ) -> None:
         self.settings = settings
         self.client = client
+        self.route_buses_service = route_buses_service
         self._cache: dict[str, CacheEntry] = {}
         self._cache_lock = threading.Lock()
         self._tracked_routes: dict[str, dict[str, float]] = {}
@@ -703,6 +936,10 @@ class RealtimeService:
             len(response.payload or []),
         )
 
+        buses_response = self.client.fetch_realtime_by_frequency_batch(
+            city,
+            effective_routeids,
+        )
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
             routeid = _tdx_routeid_to_local(
@@ -712,8 +949,22 @@ class RealtimeService:
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
 
+        buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in buses_response.payload or []:
+            routeid = _tdx_routeid_to_local(
+                city,
+                item.get("SubRouteUID") or item.get("RouteUID"),
+            )
+            if routeid in static_routes:
+                buses_by_route[routeid].append(item)
+
         for routeid, static_route in static_routes.items():
-            snapshot = self._build_snapshot(routeid, static_route, items_by_route.get(routeid, []))
+            snapshot = self._build_snapshot(
+                routeid,
+                static_route,
+                items_by_route.get(routeid, []),
+                realtime_buses=_build_buses_payload(buses_by_route.get(routeid, [])),
+            )
             self._set_cached(routeid, snapshot)
             _extract_and_store_eta_travel_times(snapshot, static_route, self.settings.db_path)
 
@@ -776,6 +1027,10 @@ class RealtimeService:
             len(response.payload or []),
         )
 
+        buses_response = self.client.fetch_realtime_by_frequency_batch(
+            city,
+            effective_routeids,
+        )
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
             routeid = _tdx_routeid_to_local(
@@ -785,8 +1040,22 @@ class RealtimeService:
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
 
+        buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in buses_response.payload or []:
+            routeid = _tdx_routeid_to_local(
+                city,
+                item.get("SubRouteUID") or item.get("RouteUID"),
+            )
+            if routeid in static_routes:
+                buses_by_route[routeid].append(item)
+
         for routeid, static_route in static_routes.items():
-            snapshot = self._build_snapshot(routeid, static_route, items_by_route.get(routeid, []))
+            snapshot = self._build_snapshot(
+                routeid,
+                static_route,
+                items_by_route.get(routeid, []),
+                realtime_buses=_build_buses_payload(buses_by_route.get(routeid, [])),
+            )
             self._set_cached(routeid, snapshot)
             _extract_and_store_eta_travel_times(snapshot, static_route, self.settings.db_path)
 
@@ -804,12 +1073,15 @@ class RealtimeService:
 
         try:
             items: list[dict[str, Any]] = []
+            buses: list[dict[str, Any]] = []
             for city in self._candidate_cities_for_route(routeid):
                 current_items = self.client.fetch_estimated_time_of_arrival(city, routeid)
+                current_buses = self.client.fetch_realtime_by_frequency(city, routeid)
                 if current_items:
                     items = current_items
+                    buses = _build_buses_payload(current_buses)
                     break
-            snapshot = self._build_snapshot(routeid, static_route, items)
+            snapshot = self._build_snapshot(routeid, static_route, items, realtime_buses=buses)
         except Exception:
             stale = self._get_cached(routeid, allow_expired=True)
             if stale is not None:
@@ -889,6 +1161,7 @@ class RealtimeService:
         routeid: str,
         static_route: dict[str, Any],
         items: list[dict[str, Any]],
+        realtime_buses: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         now_ts = int(time.time())
         item_times = []
@@ -972,6 +1245,10 @@ class RealtimeService:
             ):
                 plate_candidates.setdefault((observation.pathid, observation.plate), []).append(observation)
 
+        native_plates_by_path: dict[int, set[str]] = defaultdict(set)
+        for pathid, plate in plate_candidates:
+            native_plates_by_path[pathid].add(plate)
+
         for (pathid, plate), observations in plate_candidates.items():
             arriving_observations = [item for item in observations if item.is_arriving]
             effective_observations = arriving_observations or observations
@@ -991,7 +1268,25 @@ class RealtimeService:
             if not stop_bucket:
                 continue
             if all(bus["id"] != plate for bus in stop_bucket["buses"]):
-                stop_bucket["buses"].append({"id": plate, "type": "normal"})
+                stop_bucket["buses"].append({"id": plate, "type": "normal", "source": TDX_SOURCE})
+
+        if realtime_buses is None and self.route_buses_service is not None:
+            try:
+                realtime_buses = self.route_buses_service.get_buses(routeid)
+            except Exception:
+                LOGGER.warning("failed to fetch realtime buses for realtime backfill routeid=%s", routeid)
+                realtime_buses = []
+        else:
+            realtime_buses = realtime_buses or []
+
+        _backfill_snapshot_from_buses(
+            routeid=routeid,
+            db_path=self.settings.db_path,
+            paths=paths,
+            grouped=grouped,
+            native_plates_by_path=native_plates_by_path,
+            buses=realtime_buses,
+        )
 
         response_paths = []
         seen_pathids = set(paths)
