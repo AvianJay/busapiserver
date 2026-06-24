@@ -39,6 +39,8 @@ TDX_SOURCE = "tdx"
 BACKFILL_BUSES_SOURCE = "backfill_buses"
 BACKFILL_MAX_STOP_DISTANCE_METERS = 500.0
 BACKFILL_MAX_ANCHOR_STOP_DISTANCE_METERS = 150.0
+BACKFILL_MAX_DISAPPEARANCE_SECONDS = 90
+BACKFILL_MAX_BUS_AGE_SECONDS = 90
 LOGGER = get_logger("sync_realtime")
 
 
@@ -49,6 +51,16 @@ class PlateObservation:
     stopid: str
     eta: int | None
     is_arriving: bool
+
+
+@dataclass
+class LastNativePlateState:
+    plate: str
+    pathid: int
+    stopid: str
+    stop_seq: int | None
+    last_seen_ts: int
+    is_terminal: bool
 
 
 class RouteNotFoundError(KeyError):
@@ -129,6 +141,17 @@ def _adjusted_eta(
 
     eta = estimate_time - (now_ts - update_ts)
     return max(-1, eta)
+
+
+def _item_updated_at(item: dict[str, Any]) -> int | None:
+    return (
+        _to_unix_seconds(item.get("UpdateTime"))
+        or _to_unix_seconds(item.get("DataTime"))
+        or _to_unix_seconds(item.get("SrcRecTime"))
+        or _to_unix_seconds(item.get("SrcTransTime"))
+        or _to_unix_seconds(item.get("SrcUpdateTime"))
+        or _to_unix_seconds(item.get("TransTime"))
+    )
 
 
 def _build_message(item: dict[str, Any], *, now_ts: int) -> str:
@@ -257,6 +280,11 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
         stop_bucket["eta"] = best_eta
     if _to_int_or_none(stop_bucket.get("eta")) is not None:
         stop_bucket["message"] = ""
+    updated_at = _to_int_or_none(stop_bucket.get("updated_at"))
+    if updated_at is not None:
+        stop_bucket["updated_at"] = updated_at
+    else:
+        stop_bucket.pop("updated_at", None)
 
 
 def _to_float_or_none(value: Any) -> float | None:
@@ -285,9 +313,77 @@ def _create_stop_bucket(stopid: str) -> dict[str, Any]:
         "stopid": stopid,
         "eta": None,
         "message": "",
+        "updated_at": None,
         "buses": [],
         "etas": [],
     }
+
+
+def _set_stop_bucket_updated_at(stop_bucket: dict[str, Any], timestamp: int | None) -> None:
+    if timestamp is None:
+        return
+    current = _to_int_or_none(stop_bucket.get("updated_at"))
+    if current is None or timestamp > current:
+        stop_bucket["updated_at"] = timestamp
+
+
+def _max_path_stop_seq(path_meta: dict[str, Any]) -> int | None:
+    max_seq: int | None = None
+    for stop in path_meta.get("stops") or []:
+        if not isinstance(stop, dict):
+            continue
+        seq = _to_int_or_none(stop.get("seq"))
+        if seq is None:
+            continue
+        if max_seq is None or seq > max_seq:
+            max_seq = seq
+    return max_seq
+
+
+def _stop_bucket_has_live_data(stop_bucket: dict[str, Any]) -> bool:
+    return (
+        _to_int_or_none(stop_bucket.get("eta")) is not None
+        or bool(str(stop_bucket.get("message") or "").strip())
+        or bool(stop_bucket.get("buses"))
+        or bool(stop_bucket.get("etas"))
+    )
+
+
+def _prune_expired_backfill(snapshot: dict[str, Any], *, now_ts: int) -> None:
+    updated_at = _to_int_or_none(snapshot.get("updated_at"))
+    if updated_at is None or now_ts - updated_at <= BACKFILL_MAX_DISAPPEARANCE_SECONDS:
+        return
+
+    for path in snapshot.get("paths") or []:
+        if not isinstance(path, dict):
+            continue
+        next_stops: list[dict[str, Any]] = []
+        for stop_bucket in path.get("stops") or []:
+            if not isinstance(stop_bucket, dict):
+                continue
+            original_buses = stop_bucket.get("buses") or []
+            original_etas = stop_bucket.get("etas") or []
+            filtered_buses = [
+                bus
+                for bus in original_buses
+                if isinstance(bus, dict) and bus.get("source") != BACKFILL_BUSES_SOURCE
+            ]
+            filtered_etas = [
+                eta
+                for eta in original_etas
+                if isinstance(eta, dict) and eta.get("source") != BACKFILL_BUSES_SOURCE
+            ]
+            if (
+                len(filtered_buses) != len(original_buses)
+                or len(filtered_etas) != len(original_etas)
+            ):
+                stop_bucket["buses"] = filtered_buses
+                stop_bucket["etas"] = filtered_etas
+                stop_bucket["eta"] = None
+                _finalize_stop_eta_list(stop_bucket)
+            if _stop_bucket_has_live_data(stop_bucket):
+                next_stops.append(stop_bucket)
+        path["stops"] = next_stops
 
 
 def _find_nearest_stop(
@@ -461,6 +557,8 @@ def _extract_and_store_eta_travel_times(
             for eta_entry in stop_data.get("etas") or []:
                 if not isinstance(eta_entry, dict):
                     continue
+                if eta_entry.get("source") == BACKFILL_BUSES_SOURCE:
+                    continue
                 plate = _normalize_plate(eta_entry.get("plate"))
                 eta_val = _to_int_or_none(eta_entry.get("eta"))
                 if plate is None or eta_val is None:
@@ -626,7 +724,9 @@ def _backfill_snapshot_from_buses(
     paths: dict[int, dict[str, Any]],
     grouped: dict[int, dict[str, dict[str, Any]]],
     native_plates_by_path: dict[int, set[str]],
+    disappeared_native_plates_by_path: dict[int, dict[str, LastNativePlateState]],
     buses: list[dict[str, Any]],
+    now_ts: int,
 ) -> None:
     if not buses:
         return
@@ -638,9 +738,19 @@ def _backfill_snapshot_from_buses(
         pathid = _to_int_or_none(bus.get("direction"))
         lat = _to_float_or_none(bus.get("lat"))
         lon = _to_float_or_none(bus.get("lon"))
+        bus_time = _to_int_or_none(bus.get("time"))
         if plate is None or pathid is None or lat is None or lon is None:
             continue
         if plate in native_plates_by_path.get(pathid, set()):
+            continue
+        disappeared = disappeared_native_plates_by_path.get(pathid, {}).get(plate)
+        if disappeared is None:
+            continue
+        if disappeared.is_terminal:
+            continue
+        if now_ts - disappeared.last_seen_ts > BACKFILL_MAX_DISAPPEARANCE_SECONDS:
+            continue
+        if bus_time is None or now_ts - bus_time > BACKFILL_MAX_BUS_AGE_SECONDS:
             continue
 
         path_meta = paths.get(pathid)
@@ -654,6 +764,10 @@ def _backfill_snapshot_from_buses(
         anchor_index, anchor_stop, anchor_distance = nearest
         if anchor_distance > BACKFILL_MAX_STOP_DISTANCE_METERS:
             continue
+        if disappeared.stop_seq is not None:
+            anchor_seq = _to_int_or_none(anchor_stop.get("seq"))
+            if anchor_seq is None or anchor_seq < disappeared.stop_seq:
+                continue
 
         stopid = anchor_stop.get("stopid")
         if not stopid:
@@ -661,6 +775,7 @@ def _backfill_snapshot_from_buses(
 
         path_bucket = grouped.setdefault(pathid, {})
         stop_bucket = path_bucket.setdefault(stopid, _create_stop_bucket(stopid))
+        _set_stop_bucket_updated_at(stop_bucket, bus_time)
         if all(_normalize_plate(existing.get("id")) != plate for existing in stop_bucket["buses"]):
             stop_bucket["buses"].append(
                 {"id": plate, "type": "normal", "source": BACKFILL_BUSES_SOURCE}
@@ -713,6 +828,7 @@ def _backfill_snapshot_from_buses(
 
             running_eta = segment_seconds if running_eta is None else running_eta + segment_seconds
             current_bucket = path_bucket.setdefault(current_stopid, _create_stop_bucket(current_stopid))
+            _set_stop_bucket_updated_at(current_bucket, bus_time)
             _append_stop_eta(
                 current_bucket,
                 plate=plate,
@@ -736,6 +852,8 @@ class RealtimeService:
         self.route_buses_service = route_buses_service
         self._cache: dict[str, CacheEntry] = {}
         self._cache_lock = threading.Lock()
+        self._last_native_plate_states: dict[str, dict[tuple[int, str], LastNativePlateState]] = {}
+        self._last_native_plate_states_lock = threading.Lock()
         self._tracked_routes: dict[str, dict[str, float]] = {}
         self._tracked_routes_lock = threading.Lock()
         self._city_refresh_locks: dict[str, threading.Lock] = {}
@@ -1166,14 +1284,7 @@ class RealtimeService:
         now_ts = int(time.time())
         item_times = []
         for item in items:
-            item_time = (
-                _to_unix_seconds(item.get("UpdateTime"))
-                or _to_unix_seconds(item.get("DataTime"))
-                or _to_unix_seconds(item.get("SrcRecTime"))
-                or _to_unix_seconds(item.get("SrcTransTime"))
-                or _to_unix_seconds(item.get("SrcUpdateTime"))
-                or _to_unix_seconds(item.get("TransTime"))
-            )
+            item_time = _item_updated_at(item)
             if item_time is not None:
                 item_times.append(item_time)
         updated_at = max(item_times) if item_times else int(time.time())
@@ -1181,6 +1292,7 @@ class RealtimeService:
         paths = static_route["paths"]
         grouped: dict[int, dict[str, dict[str, Any]]] = {}
         plate_candidates: dict[tuple[int, str], list[PlateObservation]] = {}
+        current_native_plate_states: dict[tuple[int, str], LastNativePlateState] = {}
 
         for item in items:
             pathid = int(item.get("Direction") or 0)
@@ -1195,10 +1307,13 @@ class RealtimeService:
                     "stopid": stopid,
                     "eta": None,
                     "message": "",
+                    "updated_at": None,
                     "buses": [],
                     "etas": [],
                 },
             )
+            item_time = _item_updated_at(item)
+            _set_stop_bucket_updated_at(stop_bucket, item_time)
 
             estimate_time = _adjusted_eta(item, now_ts=now_ts)
             message = _build_message(item, now_ts=now_ts)
@@ -1269,6 +1384,30 @@ class RealtimeService:
                 continue
             if all(bus["id"] != plate for bus in stop_bucket["buses"]):
                 stop_bucket["buses"].append({"id": plate, "type": "normal", "source": TDX_SOURCE})
+            selected_seq = _to_int_or_none(stop_index.get(selected.stopid, {}).get("seq"))
+            max_seq = _max_path_stop_seq(path_meta or {})
+            current_state = LastNativePlateState(
+                plate=plate,
+                pathid=pathid,
+                stopid=selected.stopid,
+                stop_seq=selected_seq,
+                last_seen_ts=now_ts,
+                is_terminal=(
+                    selected_seq is not None and max_seq is not None and selected_seq >= max_seq
+                ),
+            )
+            current_native_plate_states[(pathid, plate)] = current_state
+
+        previous_native_plate_states = self._get_last_native_plate_states(routeid)
+        merged_native_plate_states = dict(previous_native_plate_states)
+        merged_native_plate_states.update(current_native_plate_states)
+        disappeared_native_plates_by_path: dict[int, dict[str, LastNativePlateState]] = defaultdict(dict)
+        for key, previous_state in previous_native_plate_states.items():
+            if key in current_native_plate_states:
+                continue
+            if now_ts - previous_state.last_seen_ts > BACKFILL_MAX_DISAPPEARANCE_SECONDS:
+                continue
+            disappeared_native_plates_by_path[previous_state.pathid][previous_state.plate] = previous_state
 
         if realtime_buses is None and self.route_buses_service is not None:
             try:
@@ -1285,7 +1424,9 @@ class RealtimeService:
             paths=paths,
             grouped=grouped,
             native_plates_by_path=native_plates_by_path,
+            disappeared_native_plates_by_path=disappeared_native_plates_by_path,
             buses=realtime_buses,
+            now_ts=now_ts,
         )
 
         response_paths = []
@@ -1321,11 +1462,14 @@ class RealtimeService:
                 }
             )
 
-        return {
+        snapshot = {
             "routeid": routeid,
             "updated_at": updated_at,
             "paths": response_paths,
         }
+        _prune_expired_backfill(snapshot, now_ts=now_ts)
+        self._set_last_native_plate_states(routeid, merged_native_plate_states)
+        return snapshot
 
     def _get_cached(self, routeid: str, *, allow_expired: bool = False) -> dict[str, Any] | None:
         now = time.time()
@@ -1335,7 +1479,9 @@ class RealtimeService:
                 return None
             if not allow_expired and entry.expires_at < now:
                 return None
-            return entry.snapshot
+            snapshot = entry.snapshot
+        _prune_expired_backfill(snapshot, now_ts=int(now))
+        return snapshot
 
     def _set_cached(self, routeid: str, snapshot: dict[str, Any]) -> None:
         with self._cache_lock:
@@ -1343,6 +1489,30 @@ class RealtimeService:
                 snapshot=snapshot,
                 expires_at=time.time() + self.settings.realtime_cache_ttl,
             )
+
+    def _get_last_native_plate_states(
+        self,
+        routeid: str,
+    ) -> dict[tuple[int, str], LastNativePlateState]:
+        with self._last_native_plate_states_lock:
+            return dict(self._last_native_plate_states.get(routeid, {}))
+
+    def _set_last_native_plate_states(
+        self,
+        routeid: str,
+        states: dict[tuple[int, str], LastNativePlateState],
+    ) -> None:
+        cutoff = int(time.time()) - BACKFILL_MAX_DISAPPEARANCE_SECONDS
+        filtered = {
+            key: state
+            for key, state in states.items()
+            if state.last_seen_ts >= cutoff
+        }
+        with self._last_native_plate_states_lock:
+            if filtered:
+                self._last_native_plate_states[routeid] = filtered
+            else:
+                self._last_native_plate_states.pop(routeid, None)
 
 
 class RouteBusesService:

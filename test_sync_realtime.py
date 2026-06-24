@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.config import Settings
 from app.db import get_connection, init_db
@@ -47,6 +48,11 @@ class _FakeTDXClient:
 
 
 class RealtimeBackfillTests(unittest.TestCase):
+    def _gps_time(self, epoch_seconds: float) -> str:
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "bus.db"
@@ -141,7 +147,7 @@ class RealtimeBackfillTests(unittest.TestCase):
         )
         return realtime_service, route_buses_service
 
-    def test_backfills_missing_bus_into_buses_and_etas(self) -> None:
+    def test_does_not_backfill_on_first_seen_bus_only_snapshot(self) -> None:
         routeid = "TXG307"
         self.client.eta_payload_by_route[routeid] = [
             {
@@ -179,6 +185,56 @@ class RealtimeBackfillTests(unittest.TestCase):
 
         path = snapshot["paths"][0]
         stops = {stop["stopid"]: stop for stop in path["stops"]}
+        self.assertNotIn("STOP2", stops)
+        self.assertNotIn("STOP3", stops)
+
+    def test_backfills_missing_bus_into_buses_and_etas_after_eta_disappears(self) -> None:
+        routeid = "TXG307"
+        realtime_service, _ = self._build_services()
+        base_time = 1_700_000_000.0
+        with patch("app.sync_realtime.time.time", return_value=base_time):
+            self.client.eta_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "StopID": "STOP2",
+                    "EstimateTime": 30,
+                    "UpdateTime": "2026-06-22T10:00:00+08:00",
+                    "PlateNumb": "BBB-0002",
+                    "VehicleStopStatus": 1,
+                }
+            ]
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "BBB-0002",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time - 5),
+                },
+            ]
+            realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        with patch("app.sync_realtime.time.time", return_value=base_time + 10):
+            self.client.eta_payload_by_route[routeid] = []
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "BBB-0002",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time + 5),
+                },
+            ]
+            snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = snapshot["paths"][0]
+        stops = {stop["stopid"]: stop for stop in path["stops"]}
+        self.assertIn("STOP2", stops)
+        self.assertIn("STOP3", stops)
         anchor_stop = stops["STOP2"]
         downstream_stop = stops["STOP3"]
 
@@ -207,6 +263,163 @@ class RealtimeBackfillTests(unittest.TestCase):
             },
             downstream_stop["etas"],
         )
+
+    def test_does_not_backfill_without_previous_native_eta(self) -> None:
+        routeid = "TXG307"
+        self.client.eta_payload_by_route[routeid] = []
+        self.client.buses_payload_by_route[routeid] = [
+            {
+                "RouteUID": routeid,
+                "SubRouteUID": routeid,
+                "Direction": 0,
+                "PlateNumb": "ZZZ-9999",
+                "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                "GPSTime": "2026-06-22T10:00:05+08:00",
+            },
+        ]
+
+        realtime_service, _ = self._build_services()
+        snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = snapshot["paths"][0]
+        for stop in path["stops"]:
+            self.assertEqual(stop["buses"], [])
+            self.assertEqual(stop["etas"], [])
+
+    def test_backfill_requires_eta_to_disappear_from_previous_snapshot(self) -> None:
+        routeid = "TXG307"
+        realtime_service, _ = self._build_services()
+        base_time = 1_700_000_000.0
+
+        with patch("app.sync_realtime.time.time", return_value=base_time):
+            self.client.eta_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "StopID": "STOP2",
+                    "EstimateTime": 45,
+                    "UpdateTime": "2026-06-22T10:00:00+08:00",
+                    "PlateNumb": "BBB-0002",
+                    "VehicleStopStatus": 0,
+                }
+            ]
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "BBB-0002",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time - 5),
+                },
+            ]
+            realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        with patch("app.sync_realtime.time.time", return_value=base_time + 10):
+            self.client.eta_payload_by_route[routeid] = []
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "BBB-0002",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time + 5),
+                },
+            ]
+            snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = snapshot["paths"][0]
+        stops = {stop["stopid"]: stop for stop in path["stops"]}
+        self.assertIn("STOP2", stops)
+        stop2 = stops["STOP2"]
+        self.assertEqual(stop2["buses"], [{"id": "BBB-0002", "type": "normal", "source": "backfill_buses"}])
+
+    def test_backfill_expires_after_disappearance_window(self) -> None:
+        routeid = "TXG307"
+        realtime_service, _ = self._build_services()
+        base_time = 1_700_000_000.0
+
+        with patch("app.sync_realtime.time.time", return_value=base_time):
+            self.client.eta_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "StopID": "STOP2",
+                    "EstimateTime": 45,
+                    "UpdateTime": "2026-06-22T10:00:00+08:00",
+                    "PlateNumb": "BBB-0002",
+                    "VehicleStopStatus": 0,
+                }
+            ]
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "BBB-0002",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time - 5),
+                },
+            ]
+            realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        with patch("app.sync_realtime.time.time", return_value=base_time + 200.0):
+            self.client.eta_payload_by_route[routeid] = []
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "BBB-0002",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time + 195),
+                },
+            ]
+            snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = snapshot["paths"][0]
+        for stop in path["stops"]:
+            self.assertEqual(stop["buses"], [])
+            self.assertEqual(stop["etas"], [])
+
+    def test_does_not_backfill_vehicle_last_seen_at_terminal_stop(self) -> None:
+        routeid = "TXG307"
+        realtime_service, _ = self._build_services()
+
+        self.client.eta_payload_by_route[routeid] = [
+            {
+                "RouteUID": routeid,
+                "SubRouteUID": routeid,
+                "Direction": 0,
+                "StopID": "STOP3",
+                "EstimateTime": 10,
+                "UpdateTime": "2026-06-22T10:00:00+08:00",
+                "PlateNumb": "TER-0001",
+                "VehicleStopStatus": 1,
+            }
+        ]
+        self.client.buses_payload_by_route[routeid] = [
+            {
+                "RouteUID": routeid,
+                "SubRouteUID": routeid,
+                "Direction": 0,
+                "PlateNumb": "TER-0001",
+                "BusPosition": {"PositionLat": 24.1012, "PositionLon": 120.6500},
+                "GPSTime": "2026-06-22T10:00:05+08:00",
+            },
+        ]
+        realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        self.client.eta_payload_by_route[routeid] = []
+        snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = snapshot["paths"][0]
+        for stop in path["stops"]:
+            self.assertEqual(stop["buses"], [])
+            self.assertEqual(stop["etas"], [])
 
     def test_does_not_duplicate_native_plate(self) -> None:
         routeid = "TXG307"
@@ -250,22 +463,50 @@ class RealtimeBackfillTests(unittest.TestCase):
                     (routeid,),
                 )
 
-        self.client.eta_payload_by_route[routeid] = []
-        self.client.buses_payload_by_route[routeid] = [
+        realtime_service, _ = self._build_services()
+        self.client.eta_payload_by_route[routeid] = [
             {
                 "RouteUID": routeid,
                 "SubRouteUID": routeid,
                 "Direction": 0,
+                "StopID": "STOP2",
+                "EstimateTime": 20,
+                "UpdateTime": "2026-06-22T10:00:00+08:00",
                 "PlateNumb": "DDD-0004",
-                "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
-                "GPSTime": "2026-06-22T10:00:05+08:00",
-            },
+                "VehicleStopStatus": 1,
+            }
         ]
+        base_time = 1_700_000_000.0
+        with patch("app.sync_realtime.time.time", return_value=base_time):
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "DDD-0004",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time - 5),
+                },
+            ]
+            realtime_service.get_snapshot(routeid, force_refresh=True)
 
-        realtime_service, _ = self._build_services()
-        snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+        with patch("app.sync_realtime.time.time", return_value=base_time + 10):
+            self.client.eta_payload_by_route[routeid] = []
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "DDD-0004",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time + 5),
+                },
+            ]
+            snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
         path = snapshot["paths"][0]
-        stop2 = next(stop for stop in path["stops"] if stop["stopid"] == "STOP2")
+        stops = {stop["stopid"]: stop for stop in path["stops"]}
+        self.assertIn("STOP2", stops)
+        stop2 = stops["STOP2"]
 
         self.assertEqual(stop2["buses"], [{"id": "DDD-0004", "type": "normal", "source": "backfill_buses"}])
         self.assertEqual(
