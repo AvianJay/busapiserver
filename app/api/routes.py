@@ -66,6 +66,39 @@ def _encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> s
     return "".join(output)
 
 
+def _load_stop_geometry_points(
+    static_route: dict | None,
+    pathid: int,
+) -> list[tuple[float, float]]:
+    if static_route is None:
+        return []
+
+    path = static_route.get("paths", {}).get(pathid)
+    if path is None:
+        return []
+
+    points: list[tuple[float, float]] = []
+    previous: tuple[float, float] | None = None
+    for stop in path.get("stops", []):
+        try:
+            lat = float(stop["lat"])
+            lon = float(stop["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(lat) and math.isfinite(lon)):
+            continue
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            continue
+
+        point = (lat, lon)
+        if point == previous:
+            continue
+        points.append(point)
+        previous = point
+
+    return points
+
+
 _city_name_to_prefix_lower = {
     city.lower(): prefix for city, prefix in CITY_NAME_TO_PREFIX.items()
 }
@@ -489,6 +522,13 @@ def get_route_path_points(routeid: str, pathid: int, request: Request) -> dict:
                 detail=f"Path {pathid} for route {routeid} was not found.",
             )
         points = load_path_points(connection, routeid, pathid)
+        if len(points) < 2:
+            stop_points = _load_stop_geometry_points(
+                load_route_static(connection, routeid),
+                pathid,
+            )
+            if len(stop_points) >= 2:
+                points = stop_points
 
     return {
         "routeid": routeid,
