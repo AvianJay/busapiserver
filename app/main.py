@@ -33,6 +33,7 @@ from app.db import (
     refresh_database_versions,
 )
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
+from app.ntpc_opendata import NtpcOpenDataClient
 from app.request_analytics import record_request_analytics, should_record_analytics
 from app.sync_realtime import RealtimeService, RouteBusesService
 from app.sync_static import sync_static
@@ -140,11 +141,13 @@ async def lifespan(app: FastAPI):
 
     token_manager = TDXTokenManager(settings)
     tdx_client = TDXClient(settings, token_manager)
+    ntpc_opendata_client = NtpcOpenDataClient(request_timeout=settings.tdx_request_timeout)
     route_buses_service = RouteBusesService(settings, tdx_client)
     realtime_service = RealtimeService(
         settings,
         tdx_client,
         route_buses_service=route_buses_service,
+        ntpc_opendata_client=ntpc_opendata_client,
     )
     scheduler_stop_event = threading.Event()
     scheduler_thread = threading.Thread(
@@ -171,6 +174,7 @@ async def lifespan(app: FastAPI):
     app.state.log_dir = log_dir
     app.state.token_manager = token_manager
     app.state.tdx_client = tdx_client
+    app.state.ntpc_opendata_client = ntpc_opendata_client
     app.state.realtime_service = realtime_service
     app.state.route_buses_service = route_buses_service
     app.state.scheduler_stop_event = scheduler_stop_event
@@ -184,6 +188,7 @@ async def lifespan(app: FastAPI):
     finally:
         scheduler_stop_event.set()
         scheduler_thread.join(timeout=5)
+        ntpc_opendata_client.close()
         tdx_client.close()
         token_manager.close()
         if tunnel is not None:

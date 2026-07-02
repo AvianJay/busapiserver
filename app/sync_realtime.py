@@ -5,6 +5,7 @@ from collections import defaultdict
 import hashlib
 import json
 import math
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from app.db import (
     save_tdx_fetch_state,
 )
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
+from app.ntpc_opendata import NtpcOpenDataClient
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient, TDXJSONResponse
 
@@ -37,6 +39,8 @@ ARRIVING_VEHICLE_STOP_STATUS = 1
 REALTIME_FETCH_STATE_RETENTION_SECONDS = 86400
 TDX_SOURCE = "tdx"
 BACKFILL_BUSES_SOURCE = "backfill_buses"
+NTPC_OPENDATA_SOURCE = "ntpc_opendata"
+ETA_SOURCES = {TDX_SOURCE, BACKFILL_BUSES_SOURCE, NTPC_OPENDATA_SOURCE}
 BACKFILL_MAX_STOP_DISTANCE_METERS = 500.0
 BACKFILL_MAX_ANCHOR_STOP_DISTANCE_METERS = 150.0
 BACKFILL_MAX_DISAPPEARANCE_SECONDS = 90
@@ -120,6 +124,13 @@ def _to_int_or_none(value: Any) -> int | None:
         return None
 
 
+def _eta_source(value: Any) -> str:
+    source = str(value or "").strip()
+    if source in ETA_SOURCES:
+        return source
+    return TDX_SOURCE
+
+
 def _adjusted_eta(
     data: dict[str, Any],
     *,
@@ -190,6 +201,79 @@ def _normalize_plate(value: Any) -> str | None:
     return plate
 
 
+def _pathid_for_ntpc_eta_row(
+    static_route: dict[str, Any],
+    *,
+    stopid: str,
+    goback: Any,
+) -> int | None:
+    paths = static_route.get("paths") or {}
+    matching_pathids = [
+        pathid
+        for pathid, path_meta in paths.items()
+        if stopid in (path_meta.get("stop_index") or {})
+    ]
+    preferred_pathid = _to_int_or_none(goback)
+    if preferred_pathid in matching_pathids:
+        return preferred_pathid
+    if len(matching_pathids) == 1:
+        return matching_pathids[0]
+    return None
+
+
+def _ntpc_eta_status(estimate_time: int) -> int | None:
+    if estimate_time == -1:
+        return 1
+    if estimate_time == -2:
+        return 2
+    if estimate_time == -3:
+        return 3
+    if estimate_time == -4:
+        return 4
+    return None
+
+
+def _build_ntpc_eta_items(
+    routeid: str,
+    static_route: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        stopid = str(row.get("stopid") or "").strip()
+        if not stopid:
+            continue
+        pathid = _pathid_for_ntpc_eta_row(
+            static_route,
+            stopid=stopid,
+            goback=row.get("goback"),
+        )
+        if pathid is None:
+            continue
+
+        estimate_time = _to_int_or_none(row.get("estimatetime"))
+        item: dict[str, Any] = {
+            "RouteUID": routeid,
+            "SubRouteUID": routeid,
+            "Direction": pathid,
+            "StopID": stopid,
+            "_source": NTPC_OPENDATA_SOURCE,
+        }
+        if estimate_time is None:
+            continue
+        if estimate_time >= 0:
+            item["EstimateTime"] = estimate_time
+            if estimate_time == 0:
+                item["VehicleStopStatus"] = ARRIVING_VEHICLE_STOP_STATUS
+        else:
+            stop_status = _ntpc_eta_status(estimate_time)
+            if stop_status is None:
+                continue
+            item["StopStatus"] = stop_status
+        items.append(item)
+    return items
+
+
 def _append_stop_eta(
     stop_bucket: dict[str, Any],
     *,
@@ -226,7 +310,7 @@ def _finalize_stop_eta_list(stop_bucket: dict[str, Any]) -> None:
         plate = _normalize_plate(entry.get("plate"))
         eta = _to_int_or_none(entry.get("eta"))
         is_arriving = bool(entry.get("is_arriving"))
-        source = entry.get("source") if entry.get("source") in {TDX_SOURCE, BACKFILL_BUSES_SOURCE} else TDX_SOURCE
+        source = _eta_source(entry.get("source"))
         estimated = bool(entry.get("estimated"))
         if eta is None:
             continue
@@ -427,14 +511,19 @@ def _load_travel_time_segments_by_path(
     routeid: str,
 ) -> dict[int, dict[tuple[int, int], int]]:
     with get_connection(db_path) as connection:
-        rows = connection.execute(
-            """
-            SELECT direction, from_seq, to_seq, avg_seconds, source
-            FROM stop_travel_times
-            WHERE routeid = ?
-            """,
-            (routeid,),
-        ).fetchall()
+        try:
+            rows = connection.execute(
+                """
+                SELECT direction, from_seq, to_seq, avg_seconds, source
+                FROM stop_travel_times
+                WHERE routeid = ?
+                """,
+                (routeid,),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "stop_travel_times" not in str(exc):
+                raise
+            rows = []
 
     segments_by_path: dict[int, dict[tuple[int, int], int]] = {}
     segment_sources: dict[int, dict[tuple[int, int], str]] = {}
@@ -724,6 +813,7 @@ def _backfill_snapshot_from_buses(
     paths: dict[int, dict[str, Any]],
     grouped: dict[int, dict[str, dict[str, Any]]],
     native_plates_by_path: dict[int, set[str]],
+    native_plate_coverage_paths: set[int],
     disappeared_native_plates_by_path: dict[int, dict[str, LastNativePlateState]],
     buses: list[dict[str, Any]],
     now_ts: int,
@@ -741,14 +831,11 @@ def _backfill_snapshot_from_buses(
         bus_time = _to_int_or_none(bus.get("time"))
         if plate is None or pathid is None or lat is None or lon is None:
             continue
-        if plate in native_plates_by_path.get(pathid, set()):
+        path_native_plates = native_plates_by_path.get(pathid, set())
+        if plate in path_native_plates:
             continue
         disappeared = disappeared_native_plates_by_path.get(pathid, {}).get(plate)
-        if disappeared is None:
-            continue
-        if disappeared.is_terminal:
-            continue
-        if now_ts - disappeared.last_seen_ts > BACKFILL_MAX_DISAPPEARANCE_SECONDS:
+        if disappeared is None and (path_native_plates or pathid in native_plate_coverage_paths):
             continue
         if bus_time is None or now_ts - bus_time > BACKFILL_MAX_BUS_AGE_SECONDS:
             continue
@@ -764,7 +851,14 @@ def _backfill_snapshot_from_buses(
         anchor_index, anchor_stop, anchor_distance = nearest
         if anchor_distance > BACKFILL_MAX_STOP_DISTANCE_METERS:
             continue
-        if disappeared.stop_seq is not None:
+        if disappeared is not None and disappeared.is_terminal:
+            continue
+        if (
+            disappeared is not None
+            and now_ts - disappeared.last_seen_ts > BACKFILL_MAX_DISAPPEARANCE_SECONDS
+        ):
+            continue
+        if disappeared is not None and disappeared.stop_seq is not None:
             anchor_seq = _to_int_or_none(anchor_stop.get("seq"))
             if anchor_seq is None or anchor_seq < disappeared.stop_seq:
                 continue
@@ -846,10 +940,12 @@ class RealtimeService:
         settings: Settings,
         client: TDXClient,
         route_buses_service: "RouteBusesService | None" = None,
+        ntpc_opendata_client: NtpcOpenDataClient | None = None,
     ) -> None:
         self.settings = settings
         self.client = client
         self.route_buses_service = route_buses_service
+        self.ntpc_opendata_client = ntpc_opendata_client
         self._cache: dict[str, CacheEntry] = {}
         self._cache_lock = threading.Lock()
         self._last_native_plate_states: dict[str, dict[tuple[int, str], LastNativePlateState]] = {}
@@ -988,6 +1084,41 @@ class RealtimeService:
 
         return results
 
+    def _apply_ntpc_eta_fallback(
+        self,
+        city: str,
+        static_routes: dict[str, dict[str, Any]],
+        items_by_route: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        if city != "NewTaipei" or self.ntpc_opendata_client is None:
+            return
+
+        routeids = [
+            routeid
+            for routeid in static_routes
+            if routeid.upper().startswith("NWT") and not items_by_route.get(routeid)
+        ]
+        if not routeids:
+            return
+
+        try:
+            rows_by_route = self.ntpc_opendata_client.fetch_estimated_time_of_arrival_by_subroute(routeids)
+        except Exception:
+            LOGGER.warning(
+                "NTPC OpenData ETA fallback failed routes=%s",
+                len(routeids),
+            )
+            return
+
+        for routeid in routeids:
+            fallback_items = _build_ntpc_eta_items(
+                routeid,
+                static_routes[routeid],
+                rows_by_route.get(routeid, []),
+            )
+            if fallback_items:
+                items_by_route[routeid].extend(fallback_items)
+
     def _refresh_city_cache_for_routes(
         self,
         city: str,
@@ -1066,6 +1197,7 @@ class RealtimeService:
             )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
+        self._apply_ntpc_eta_fallback(city, static_routes, items_by_route)
 
         buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in buses_response.payload or []:
@@ -1157,6 +1289,7 @@ class RealtimeService:
             )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
+        self._apply_ntpc_eta_fallback(city, static_routes, items_by_route)
 
         buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in buses_response.payload or []:
@@ -1199,6 +1332,11 @@ class RealtimeService:
                     items = current_items
                     buses = _build_buses_payload(current_buses)
                     break
+            if not items and routeid.upper().startswith("NWT") and self.ntpc_opendata_client is not None:
+                rows_by_route = self.ntpc_opendata_client.fetch_estimated_time_of_arrival_by_subroute(
+                    [routeid]
+                )
+                items = _build_ntpc_eta_items(routeid, static_route, rows_by_route.get(routeid, []))
             snapshot = self._build_snapshot(routeid, static_route, items, realtime_buses=buses)
         except Exception:
             stale = self._get_cached(routeid, allow_expired=True)
@@ -1299,6 +1437,8 @@ class RealtimeService:
             stopid = item.get("StopID") or item.get("StopUID")
             if not stopid:
                 continue
+            item_source = _eta_source(item.get("source") or item.get("_source"))
+            item_estimated = bool(item.get("estimated") or item.get("_estimated"))
 
             path_bucket = grouped.setdefault(pathid, {})
             stop_bucket = path_bucket.setdefault(
@@ -1333,6 +1473,8 @@ class RealtimeService:
                 plate=top_plate,
                 eta=estimate_time,
                 is_arriving=top_is_arriving,
+                source=item_source,
+                estimated=item_estimated,
             )
 
             for estimate in item.get("Estimates") or []:
@@ -1350,6 +1492,8 @@ class RealtimeService:
                     plate=estimate_plate,
                     eta=estimate_eta,
                     is_arriving=estimate_is_arriving,
+                    source=item_source,
+                    estimated=item_estimated,
                 )
 
             for observation in _collect_plate_observations(
@@ -1399,6 +1543,10 @@ class RealtimeService:
             current_native_plate_states[(pathid, plate)] = current_state
 
         previous_native_plate_states = self._get_last_native_plate_states(routeid)
+        native_plate_coverage_paths = set(native_plates_by_path)
+        native_plate_coverage_paths.update(
+            state.pathid for state in previous_native_plate_states.values()
+        )
         merged_native_plate_states = dict(previous_native_plate_states)
         merged_native_plate_states.update(current_native_plate_states)
         disappeared_native_plates_by_path: dict[int, dict[str, LastNativePlateState]] = defaultdict(dict)
@@ -1424,6 +1572,7 @@ class RealtimeService:
             paths=paths,
             grouped=grouped,
             native_plates_by_path=native_plates_by_path,
+            native_plate_coverage_paths=native_plate_coverage_paths,
             disappeared_native_plates_by_path=disappeared_native_plates_by_path,
             buses=realtime_buses,
             now_ts=now_ts,
