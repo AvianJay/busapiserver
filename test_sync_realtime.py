@@ -202,7 +202,7 @@ class RealtimeBackfillTests(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(stops["STOP3"]["message"], "尚未發車")
+        self.assertNotIn("STOP3", stops)
 
     def test_ntpc_eta_fallback_does_not_override_native_tdx_eta(self) -> None:
         routeid = "NWT157491"
@@ -398,6 +398,45 @@ class RealtimeBackfillTests(unittest.TestCase):
                 "estimated": True,
             },
             stops["STOP3"]["etas"],
+        )
+
+    def test_backfills_multiple_gps_only_buses_on_same_path(self) -> None:
+        routeid = "TXG307"
+        base_time = 1_700_000_000.0
+        self.client.eta_payload_by_route[routeid] = []
+        self.client.buses_payload_by_route[routeid] = [
+            {
+                "RouteUID": routeid,
+                "SubRouteUID": routeid,
+                "Direction": 0,
+                "PlateNumb": "GPS-0001",
+                "BusPosition": {"PositionLat": 24.1000, "PositionLon": 120.6500},
+                "GPSTime": self._gps_time(base_time - 5),
+            },
+            {
+                "RouteUID": routeid,
+                "SubRouteUID": routeid,
+                "Direction": 0,
+                "PlateNumb": "GPS-0002",
+                "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                "GPSTime": self._gps_time(base_time - 5),
+            },
+        ]
+
+        realtime_service, _ = self._build_services()
+        with patch("app.sync_realtime.time.time", return_value=base_time):
+            snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = snapshot["paths"][0]
+        buses = [
+            bus
+            for stop in path["stops"]
+            for bus in stop["buses"]
+            if bus.get("source") == "backfill_buses"
+        ]
+        self.assertEqual(
+            sorted(bus["id"] for bus in buses),
+            ["GPS-0001", "GPS-0002"],
         )
 
     def test_backfill_requires_eta_to_disappear_from_previous_snapshot(self) -> None:

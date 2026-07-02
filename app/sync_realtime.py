@@ -221,18 +221,6 @@ def _pathid_for_ntpc_eta_row(
     return None
 
 
-def _ntpc_eta_status(estimate_time: int) -> int | None:
-    if estimate_time == -1:
-        return 1
-    if estimate_time == -2:
-        return 2
-    if estimate_time == -3:
-        return 3
-    if estimate_time == -4:
-        return 4
-    return None
-
-
 def _build_ntpc_eta_items(
     routeid: str,
     static_route: dict[str, Any],
@@ -261,15 +249,11 @@ def _build_ntpc_eta_items(
         }
         if estimate_time is None:
             continue
-        if estimate_time >= 0:
-            item["EstimateTime"] = estimate_time
-            if estimate_time == 0:
-                item["VehicleStopStatus"] = ARRIVING_VEHICLE_STOP_STATUS
-        else:
-            stop_status = _ntpc_eta_status(estimate_time)
-            if stop_status is None:
-                continue
-            item["StopStatus"] = stop_status
+        if estimate_time < 0:
+            continue
+        item["EstimateTime"] = estimate_time
+        if estimate_time == 0:
+            item["VehicleStopStatus"] = ARRIVING_VEHICLE_STOP_STATUS
         items.append(item)
     return items
 
@@ -822,6 +806,7 @@ def _backfill_snapshot_from_buses(
         return
 
     travel_time_segments = _load_travel_time_segments_by_path(db_path, routeid)
+    backfilled_plates_by_path: dict[int, set[str]] = defaultdict(set)
 
     for bus in buses:
         plate = _normalize_plate(bus.get("id"))
@@ -832,7 +817,8 @@ def _backfill_snapshot_from_buses(
         if plate is None or pathid is None or lat is None or lon is None:
             continue
         path_native_plates = native_plates_by_path.get(pathid, set())
-        if plate in path_native_plates:
+        path_backfilled_plates = backfilled_plates_by_path[pathid]
+        if plate in path_native_plates or plate in path_backfilled_plates:
             continue
         disappeared = disappeared_native_plates_by_path.get(pathid, {}).get(plate)
         if disappeared is None and (path_native_plates or pathid in native_plate_coverage_paths):
@@ -875,7 +861,7 @@ def _backfill_snapshot_from_buses(
                 {"id": plate, "type": "normal", "source": BACKFILL_BUSES_SOURCE}
             )
 
-        native_plates_by_path.setdefault(pathid, set()).add(plate)
+        path_backfilled_plates.add(plate)
 
         stop_seq = _to_int_or_none(anchor_stop.get("seq"))
         if stop_seq is None:
