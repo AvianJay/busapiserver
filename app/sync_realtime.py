@@ -45,6 +45,11 @@ BACKFILL_MAX_STOP_DISTANCE_METERS = 500.0
 BACKFILL_MAX_ANCHOR_STOP_DISTANCE_METERS = 150.0
 BACKFILL_MAX_DISAPPEARANCE_SECONDS = 90
 BACKFILL_MAX_BUS_AGE_SECONDS = 90
+DISTANCE_FALLBACK_ROUTE_FACTOR = 1.15
+DISTANCE_FALLBACK_SPEED_METERS_PER_SECOND = 5.5
+DISTANCE_FALLBACK_STOP_DWELL_SECONDS = 20
+DISTANCE_FALLBACK_MIN_SEGMENT_SECONDS = 30
+DISTANCE_FALLBACK_MAX_SEGMENT_SECONDS = 240
 LOGGER = get_logger("sync_realtime")
 
 
@@ -532,6 +537,63 @@ def _load_travel_time_segments_by_path(
     return segments_by_path
 
 
+def _estimate_distance_fallback_segment_seconds(
+    from_stop: dict[str, Any],
+    to_stop: dict[str, Any],
+) -> int | None:
+    from_lat = _to_float_or_none(from_stop.get("lat"))
+    from_lon = _to_float_or_none(from_stop.get("lon"))
+    to_lat = _to_float_or_none(to_stop.get("lat"))
+    to_lon = _to_float_or_none(to_stop.get("lon"))
+    if None in {from_lat, from_lon, to_lat, to_lon}:
+        return None
+    if not all(math.isfinite(value) for value in (from_lat, from_lon, to_lat, to_lon)):
+        return None
+
+    distance = _distance_meters(from_lat, from_lon, to_lat, to_lon)
+    if distance <= 0:
+        return DISTANCE_FALLBACK_MIN_SEGMENT_SECONDS
+
+    adjusted_distance = distance * DISTANCE_FALLBACK_ROUTE_FACTOR
+    seconds = int(
+        round(
+            adjusted_distance / DISTANCE_FALLBACK_SPEED_METERS_PER_SECOND
+            + DISTANCE_FALLBACK_STOP_DWELL_SECONDS
+        )
+    )
+    return max(
+        DISTANCE_FALLBACK_MIN_SEGMENT_SECONDS,
+        min(DISTANCE_FALLBACK_MAX_SEGMENT_SECONDS, seconds),
+    )
+
+
+def _build_distance_fallback_segments(
+    path_meta: dict[str, Any],
+) -> dict[tuple[int, int], int]:
+    path_stops = sorted(
+        (stop for stop in path_meta.get("stops") or [] if isinstance(stop, dict)),
+        key=lambda stop: (_to_int_or_none(stop.get("seq")) or 10**9, stop.get("stopid") or ""),
+    )
+    if len(path_stops) < 2:
+        return {}
+
+    segments: dict[tuple[int, int], int] = {}
+    previous_stop: dict[str, Any] | None = None
+    previous_seq: int | None = None
+    for stop in path_stops:
+        current_seq = _to_int_or_none(stop.get("seq"))
+        if current_seq is None:
+            continue
+        if previous_stop is not None and previous_seq is not None and current_seq > previous_seq:
+            segment_seconds = _estimate_distance_fallback_segment_seconds(previous_stop, stop)
+            if segment_seconds is not None:
+                segments[(previous_seq, current_seq)] = segment_seconds
+        previous_stop = stop
+        previous_seq = current_seq
+
+    return segments
+
+
 def _collect_plate_observations(
     item: dict[str, Any],
     *,
@@ -806,6 +868,7 @@ def _backfill_snapshot_from_buses(
         return
 
     travel_time_segments = _load_travel_time_segments_by_path(db_path, routeid)
+    fallback_segments_by_path: dict[int, dict[tuple[int, int], int]] = {}
     backfilled_plates_by_path: dict[int, set[str]] = defaultdict(set)
 
     for bus in buses:
@@ -885,7 +948,12 @@ def _backfill_snapshot_from_buses(
         if not path_stops:
             continue
 
-        segments = travel_time_segments.get(pathid, {})
+        fallback_segments = fallback_segments_by_path.get(pathid)
+        if fallback_segments is None:
+            fallback_segments = _build_distance_fallback_segments(path_meta)
+            fallback_segments_by_path[pathid] = fallback_segments
+        segments = dict(fallback_segments)
+        segments.update(travel_time_segments.get(pathid, {}))
         running_eta = anchor_eta
         previous_seq = stop_seq
         started = False

@@ -607,7 +607,7 @@ class RealtimeBackfillTests(unittest.TestCase):
         self.assertEqual(stop2["buses"], [{"id": "CCC-0003", "type": "normal", "source": "tdx"}])
         self.assertEqual(len([eta for eta in stop2["etas"] if eta["plate"] == "CCC-0003"]), 1)
 
-    def test_backfills_only_bus_when_travel_time_missing(self) -> None:
+    def test_backfills_future_stops_when_travel_time_missing(self) -> None:
         routeid = "TXG307"
         with get_connection(self.db_path) as connection:
             with connection:
@@ -675,10 +675,20 @@ class RealtimeBackfillTests(unittest.TestCase):
             ],
         )
         self.assertEqual(stop2["eta"], 0)
-        stop_ids = {stop["stopid"] for stop in path["stops"]}
-        self.assertNotIn("STOP3", stop_ids)
+        self.assertIn("STOP3", stops)
+        stop3 = stops["STOP3"]
+        self.assertEqual(
+            stop3["buses"],
+            [],
+        )
+        self.assertEqual(len(stop3["etas"]), 1)
+        self.assertEqual(stop3["etas"][0]["plate"], "DDD-0004")
+        self.assertEqual(stop3["etas"][0]["source"], "backfill_buses")
+        self.assertTrue(stop3["etas"][0]["estimated"])
+        self.assertGreater(stop3["etas"][0]["eta"], 0)
+        self.assertEqual(stop3["eta"], stop3["etas"][0]["eta"])
 
-    def test_backfills_anchor_when_travel_time_table_missing(self) -> None:
+    def test_backfills_future_stops_when_travel_time_table_missing(self) -> None:
         routeid = "TXG307"
         with get_connection(self.db_path) as connection:
             with connection:
@@ -707,7 +717,8 @@ class RealtimeBackfillTests(unittest.TestCase):
             stops["STOP2"]["buses"],
             [{"id": "NO-TABLE", "type": "normal", "source": "backfill_buses"}],
         )
-        self.assertNotIn("STOP3", stops)
+        self.assertIn("STOP3", stops)
+        self.assertGreater(stops["STOP3"]["eta"], 0)
 
     def test_skips_bus_that_is_too_far_from_any_stop(self) -> None:
         routeid = "TXG307"
