@@ -10,7 +10,7 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
+from starlette_compress import CompressMiddleware
 
 from app.api.admin import router as admin_router
 from app.api.analytics import router as analytics_router
@@ -222,6 +222,18 @@ def configure_cors(app: FastAPI, origins: Sequence[str]) -> None:
     )
 
 
+def configure_response_compression(app: FastAPI) -> None:
+    app.add_middleware(
+        CompressMiddleware,
+        minimum_size=500,
+        brotli=True,
+        brotli_quality=5,
+        gzip=True,
+        gzip_level=5,
+        zstd=False,
+    )
+
+
 settings = get_settings()
 # get_settings() is lru_cache'd so this returns the same instance used in lifespan.
 configure_cors(app, settings.cors_origins)
@@ -262,7 +274,7 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=5)
+configure_response_compression(app)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(analytics_router)
