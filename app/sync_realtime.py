@@ -1143,6 +1143,7 @@ class RealtimeService:
         city: str,
         static_routes: dict[str, dict[str, Any]],
         items_by_route: dict[str, list[dict[str, Any]]],
+        buses_by_route: dict[str, list[dict[str, Any]]],
     ) -> None:
         if city != "NewTaipei" or self.ntpc_opendata_client is None:
             return
@@ -1150,7 +1151,11 @@ class RealtimeService:
         routeids = [
             routeid
             for routeid in static_routes
-            if routeid.upper().startswith("NWT") and not items_by_route.get(routeid)
+            if (
+                routeid.upper().startswith("NWT")
+                and not items_by_route.get(routeid)
+                and buses_by_route.get(routeid)
+            )
         ]
         if not routeids:
             return
@@ -1251,7 +1256,6 @@ class RealtimeService:
             )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
-        self._apply_ntpc_eta_fallback(city, static_routes, items_by_route)
 
         buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in buses_response.payload or []:
@@ -1261,6 +1265,7 @@ class RealtimeService:
             )
             if routeid in static_routes:
                 buses_by_route[routeid].append(item)
+        self._apply_ntpc_eta_fallback(city, static_routes, items_by_route, buses_by_route)
 
         for routeid, static_route in static_routes.items():
             snapshot = self._build_snapshot(
@@ -1343,7 +1348,6 @@ class RealtimeService:
             )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
-        self._apply_ntpc_eta_fallback(city, static_routes, items_by_route)
 
         buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in buses_response.payload or []:
@@ -1353,6 +1357,7 @@ class RealtimeService:
             )
             if routeid in static_routes:
                 buses_by_route[routeid].append(item)
+        self._apply_ntpc_eta_fallback(city, static_routes, items_by_route, buses_by_route)
 
         for routeid, static_route in static_routes.items():
             snapshot = self._build_snapshot(
@@ -1382,11 +1387,17 @@ class RealtimeService:
             for city in self._candidate_cities_for_route(routeid):
                 current_items = self.client.fetch_estimated_time_of_arrival(city, routeid)
                 current_buses = self.client.fetch_realtime_by_frequency(city, routeid)
+                if current_buses:
+                    buses = _build_buses_payload(current_buses)
                 if current_items:
                     items = current_items
-                    buses = _build_buses_payload(current_buses)
                     break
-            if not items and routeid.upper().startswith("NWT") and self.ntpc_opendata_client is not None:
+            if (
+                not items
+                and buses
+                and routeid.upper().startswith("NWT")
+                and self.ntpc_opendata_client is not None
+            ):
                 rows_by_route = self.ntpc_opendata_client.fetch_estimated_time_of_arrival_by_subroute(
                     [routeid]
                 )

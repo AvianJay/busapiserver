@@ -169,6 +169,16 @@ class RealtimeBackfillTests(unittest.TestCase):
         routeid = "NWT157491"
         self._seed_route(routeid)
         self.client.eta_payload_by_route[routeid] = []
+        self.client.buses_payload_by_route[routeid] = [
+            {
+                "RouteUID": routeid,
+                "SubRouteUID": routeid,
+                "Direction": 0,
+                "PlateNumb": "NTPC-ETA",
+                "BusPosition": {"PositionLat": 25.0, "PositionLon": 121.0},
+                "GPSTime": "2026-06-22T10:00:05+08:00",
+            },
+        ]
         self.ntpc_client.eta_payload_by_route[routeid] = [
             {
                 "routeid": "16468",
@@ -203,6 +213,28 @@ class RealtimeBackfillTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("STOP3", stops)
+
+    def test_skips_ntpc_eta_fallback_when_tdx_has_no_realtime_buses(self) -> None:
+        routeid = "NWT157491"
+        self._seed_route(routeid)
+        self.client.eta_payload_by_route[routeid] = []
+        self.client.buses_payload_by_route[routeid] = []
+        self.ntpc_client.eta_payload_by_route[routeid] = [
+            {
+                "routeid": "16468",
+                "stopid": "STOP2",
+                "estimatetime": "0",
+                "goback": "0",
+            },
+        ]
+
+        realtime_service, _ = self._build_services()
+        snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
+
+        path = next(path for path in snapshot["paths"] if path["pathid"] == 0)
+        stops = {stop["stopid"]: stop for stop in path["stops"]}
+        self.assertNotIn("STOP2", stops)
+        self.assertEqual(self.ntpc_client.requested_routeids, [])
 
     def test_ntpc_eta_fallback_does_not_override_native_tdx_eta(self) -> None:
         routeid = "NWT157491"
