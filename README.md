@@ -131,12 +131,12 @@ curl http://127.0.0.1:8000/api/v1/routes/TPE307/realtime
 - `eta`: nearest ETA for the stop (backward-compatible)
 - `message`: stop status text (kept for backward compatibility; empty when `eta` has seconds)
 - `buses`: bus plates whose best estimated stop is this station (one stop per plate)
-  - `source`: `tdx` for native stop-estimate data, `backfill_buses` when the plate is recovered from `/realtime/buses`
+  - `source`: `tdx` for native stop-estimate data, `backfill_buses` when a plate that was recently present in native ETA disappears and is temporarily recovered from `/realtime/buses`
 - `etas`: list of upcoming estimates with valid ETA for this stop, each item has:
   - `plate`: bus plate if available
   - `eta`: ETA in seconds
   - `is_arriving`: whether this estimate is marked as arriving
-  - `source`: `tdx` for native stop-estimate data, `backfill_buses` when the estimate is derived from `/realtime/buses`
+  - `source`: `tdx` for native stop-estimate data, `backfill_buses` when the estimate is derived from `/realtime/buses` after a recently seen native ETA plate disappears
   - `estimated`: whether this ETA was synthesized from bus-position backfill rather than returned directly by TDX
 
 Stops example:

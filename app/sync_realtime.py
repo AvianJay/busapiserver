@@ -859,7 +859,6 @@ def _backfill_snapshot_from_buses(
     paths: dict[int, dict[str, Any]],
     grouped: dict[int, dict[str, dict[str, Any]]],
     native_plates_by_path: dict[int, set[str]],
-    native_plate_coverage_paths: set[int],
     disappeared_native_plates_by_path: dict[int, dict[str, LastNativePlateState]],
     buses: list[dict[str, Any]],
     now_ts: int,
@@ -884,7 +883,7 @@ def _backfill_snapshot_from_buses(
         if plate in path_native_plates or plate in path_backfilled_plates:
             continue
         disappeared = disappeared_native_plates_by_path.get(pathid, {}).get(plate)
-        if disappeared is None and (path_native_plates or pathid in native_plate_coverage_paths):
+        if disappeared is None:
             continue
         if bus_time is None or now_ts - bus_time > BACKFILL_MAX_BUS_AGE_SECONDS:
             continue
@@ -1608,10 +1607,6 @@ class RealtimeService:
             current_native_plate_states[(pathid, plate)] = current_state
 
         previous_native_plate_states = self._get_last_native_plate_states(routeid)
-        native_plate_coverage_paths = set(native_plates_by_path)
-        native_plate_coverage_paths.update(
-            state.pathid for state in previous_native_plate_states.values()
-        )
         merged_native_plate_states = dict(previous_native_plate_states)
         merged_native_plate_states.update(current_native_plate_states)
         disappeared_native_plates_by_path: dict[int, dict[str, LastNativePlateState]] = defaultdict(dict)
@@ -1637,7 +1632,6 @@ class RealtimeService:
             paths=paths,
             grouped=grouped,
             native_plates_by_path=native_plates_by_path,
-            native_plate_coverage_paths=native_plate_coverage_paths,
             disappeared_native_plates_by_path=disappeared_native_plates_by_path,
             buses=realtime_buses,
             now_ts=now_ts,

@@ -384,7 +384,7 @@ class RealtimeBackfillTests(unittest.TestCase):
             downstream_stop["etas"],
         )
 
-    def test_backfills_from_gps_when_native_eta_has_no_plate_coverage(self) -> None:
+    def test_does_not_backfill_from_gps_without_previous_native_eta_plate(self) -> None:
         routeid = "TXG307"
         base_time = 1_700_000_000.0
         self.client.eta_payload_by_route[routeid] = []
@@ -404,35 +404,9 @@ class RealtimeBackfillTests(unittest.TestCase):
             snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
 
         path = snapshot["paths"][0]
-        stops = {stop["stopid"]: stop for stop in path["stops"]}
-        self.assertIn("STOP2", stops)
-        self.assertIn("STOP3", stops)
-        self.assertEqual(
-            stops["STOP2"]["buses"],
-            [{"id": "ZZZ-9999", "type": "normal", "source": "backfill_buses"}],
-        )
-        self.assertIn(
-            {
-                "plate": "ZZZ-9999",
-                "eta": 0,
-                "is_arriving": True,
-                "source": "backfill_buses",
-                "estimated": True,
-            },
-            stops["STOP2"]["etas"],
-        )
-        self.assertIn(
-            {
-                "plate": "ZZZ-9999",
-                "eta": 90,
-                "is_arriving": False,
-                "source": "backfill_buses",
-                "estimated": True,
-            },
-            stops["STOP3"]["etas"],
-        )
+        self.assertEqual(path["stops"], [])
 
-    def test_backfills_multiple_gps_only_buses_on_same_path(self) -> None:
+    def test_does_not_backfill_multiple_gps_only_buses_on_same_path(self) -> None:
         routeid = "TXG307"
         base_time = 1_700_000_000.0
         self.client.eta_payload_by_route[routeid] = []
@@ -460,16 +434,7 @@ class RealtimeBackfillTests(unittest.TestCase):
             snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
 
         path = snapshot["paths"][0]
-        buses = [
-            bus
-            for stop in path["stops"]
-            for bus in stop["buses"]
-            if bus.get("source") == "backfill_buses"
-        ]
-        self.assertEqual(
-            sorted(bus["id"] for bus in buses),
-            ["GPS-0001", "GPS-0002"],
-        )
+        self.assertEqual(path["stops"], [])
 
     def test_backfill_requires_eta_to_disappear_from_previous_snapshot(self) -> None:
         routeid = "TXG307"
@@ -722,11 +687,37 @@ class RealtimeBackfillTests(unittest.TestCase):
 
     def test_backfills_future_stops_when_travel_time_table_missing(self) -> None:
         routeid = "TXG307"
+        realtime_service, _ = self._build_services()
+        base_time = 1_700_000_000.0
+        with patch("app.sync_realtime.time.time", return_value=base_time):
+            self.client.eta_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "StopID": "STOP2",
+                    "EstimateTime": 20,
+                    "UpdateTime": "2026-06-22T10:00:00+08:00",
+                    "PlateNumb": "NO-TABLE",
+                    "VehicleStopStatus": 1,
+                }
+            ]
+            self.client.buses_payload_by_route[routeid] = [
+                {
+                    "RouteUID": routeid,
+                    "SubRouteUID": routeid,
+                    "Direction": 0,
+                    "PlateNumb": "NO-TABLE",
+                    "BusPosition": {"PositionLat": 24.10062, "PositionLon": 120.6500},
+                    "GPSTime": self._gps_time(base_time - 5),
+                },
+            ]
+            realtime_service.get_snapshot(routeid, force_refresh=True)
+
         with get_connection(self.db_path) as connection:
             with connection:
                 connection.execute("DROP TABLE stop_travel_times")
 
-        base_time = 1_700_000_000.0
         self.client.eta_payload_by_route[routeid] = []
         self.client.buses_payload_by_route[routeid] = [
             {
@@ -739,8 +730,7 @@ class RealtimeBackfillTests(unittest.TestCase):
             },
         ]
 
-        realtime_service, _ = self._build_services()
-        with patch("app.sync_realtime.time.time", return_value=base_time):
+        with patch("app.sync_realtime.time.time", return_value=base_time + 10):
             snapshot = realtime_service.get_snapshot(routeid, force_refresh=True)
 
         path = snapshot["paths"][0]
