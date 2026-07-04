@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YABus Analytics</title>
+
+  <!-- Load Roboto Font & Material Symbols -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+
+  <!-- Define the Import Map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "@material/web/": "https://esm.run/@material/web/"
+      }
+    }
+  </script>
+
+  <!-- Import Material Web Components Modules -->
+  <script type="module">
+    import '@material/web/all.js';
+    import {styles as typescaleStyles} from '@material/web/typography/md-typescale-styles.js';
+    if (document.adoptedStyleSheets) {
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, typescaleStyles.styleSheet];
+    }
+  </script>
+
+  <style>
+    :root {
+      /* M3 Dark Palette */
+      --md-sys-color-primary: #80f3d6;
+      --md-sys-color-on-primary: #00382d;
+      --md-sys-color-primary-container: #005142;
+      --md-sys-color-on-primary-container: #9dfad7;
+      --md-sys-color-secondary: #b0ccc2;
+      --md-sys-color-on-secondary: #1b352e;
+      --md-sys-color-surface: #0f1418;
+      --md-sys-color-on-surface: #e1e3e0;
+      --md-sys-color-surface-container: #202327;
+      --md-sys-color-surface-container-high: #2a2d32;
+      --md-sys-color-outline: #8a928f;
+      --md-sys-color-outline-variant: #3f4946;
+      --md-sys-color-error: #ffb4ab;
+      --md-sys-color-on-error: #690005;
+      --md-sys-color-error-container: #93000a;
+      --md-sys-color-on-error-container: #ffdad6;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body, h1, h2, h3, p, form, label {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      background-color: var(--md-sys-color-surface);
+      color: var(--md-sys-color-on-surface);
+      font-family: Roboto, system-ui, -apple-system, sans-serif;
+      padding-bottom: 60px;
+    }
+
+    md-tabs {
+      background-color: var(--md-sys-color-surface-container);
+      --md-tabs-active-tab-indicator-color: var(--md-sys-color-primary);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    md-primary-tab {
+      --md-primary-tab-active-label-text-color: var(--md-sys-color-primary);
+      --md-primary-tab-active-icon-color: var(--md-sys-color-primary);
+      --md-primary-tab-label-text-color: var(--md-sys-color-outline);
+      --md-primary-tab-icon-color: var(--md-sys-color-outline);
+      font-family: Roboto, system-ui;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .header-panel {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .filters {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    md-outlined-text-field {
+      width: 140px;
+      --md-outlined-text-field-container-shape: 12px;
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .m3-card {
+      background-color: var(--md-sys-color-surface-container);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .m3-card-title {
+      font-weight: 700;
+      color: var(--md-sys-color-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+    }
+
+    .summary-item {
+      background-color: var(--md-sys-color-surface-container-high);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .summary-label {
+      color: var(--md-sys-color-outline);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+
+    .summary-value {
+      color: var(--md-sys-color-on-surface);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.1;
+      overflow-wrap: anywhere;
+    }
+
+    .summary-hint {
+      color: var(--md-sys-color-outline);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .split-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+      gap: 24px;
+    }
+
+    .panel-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .caption {
+      color: var(--md-sys-color-outline);
+      font-size: 13px;
+    }
+
+    .bars {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bar-row {
+      display: grid;
+      gap: 6px;
+    }
+
+    .bar-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--md-sys-color-on-surface);
+      font-size: 13px;
+    }
+
+    .bar-track {
+      height: 10px;
+      border-radius: 999px;
+      background-color: var(--md-sys-color-outline-variant);
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background-color: var(--md-sys-color-primary);
+      min-width: 8px;
+      transform-origin: left;
+      animation: expand 360ms ease both;
+    }
+
+    @keyframes expand {
+      from {
+        transform: scaleX(0.35);
+        opacity: 0.6;
+      }
+      to {
+        transform: scaleX(1);
+        opacity: 1;
+      }
+    }
+
+    .chip-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .data-chip {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      min-height: 32px;
+      padding: 6px 12px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 999px;
+      background-color: var(--md-sys-color-surface-container-high);
+      color: var(--md-sys-color-on-surface);
+      font-size: 13px;
+      font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+
+    .data-chip strong {
+      color: var(--md-sys-color-primary);
+      font-weight: 700;
+      margin-left: 6px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 12px;
+      background-color: var(--md-sys-color-surface-container-high);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 12px;
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    th {
+      color: var(--md-sys-color-outline);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    td {
+      color: var(--md-sys-color-on-surface);
+    }
+
+    code, .mono {
+      color: var(--md-sys-color-primary);
+      font-family: "Roboto Mono", "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .muted {
+      color: var(--md-sys-color-outline);
+    }
+
+    .notice, .empty {
+      border-radius: 12px;
+      padding: 16px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .notice.error {
+      background-color: rgba(248, 113, 113, 0.1);
+      border-color: rgba(248, 113, 113, 0.4);
+      color: #f87171;
+    }
+
+    .empty {
+      color: var(--md-sys-color-outline);
+      text-align: center;
+      border-style: dashed;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        padding: 20px;
+      }
+
+      .split-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header-panel {
+        align-items: stretch;
+      }
+
+      .header-actions,
+      .filters {
+        width: 100%;
+      }
+
+      md-outlined-text-field {
+        flex: 1 1 130px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <md-tabs id="adminTabs" active-tab-index="0">
+    <md-primary-tab id="tabAnalytics">
+      <md-icon slot="icon">analytics</md-icon>
+      流量分析
+    </md-primary-tab>
+    <md-primary-tab id="tabAnnouncements">
+      <md-icon slot="icon">campaign</md-icon>
+      公告管理
+    </md-primary-tab>
+    <md-primary-tab id="tabUsers">
+      <md-icon slot="icon">manage_accounts</md-icon>
+      使用者管理
+    </md-primary-tab>
+    <md-primary-tab id="tabFeedbacks">
+      <md-icon slot="icon">inbox</md-icon>
+      意見回饋
+    </md-primary-tab>
+    <md-primary-tab id="tabAccount">
+      <md-icon slot="icon">account_circle</md-icon>
+      帳號
+    </md-primary-tab>
+  </md-tabs>
+
+  <main>
+    <section class="header-panel">
+      <div>
+        <h1 class="md-typescale-headline-medium" style="font-weight: 700;">流量分析</h1>
+        <p class="md-typescale-body-medium" style="color: var(--md-sys-color-outline); margin-top: 4px;">
+          API request analytics
+        </p>
+      </div>
+      <form id="filters" class="filters">
+        <md-outlined-text-field id="days" name="days" type="number" label="天數" min="0" max="365" value="7">
+          <md-icon slot="leading-icon">calendar_month</md-icon>
+        </md-outlined-text-field>
+        <md-outlined-text-field id="limit" name="limit" type="number" label="筆數" min="1" max="200" value="20">
+          <md-icon slot="leading-icon">table_rows</md-icon>
+        </md-outlined-text-field>
+        <md-filled-button id="refreshButton" type="submit">
+          <md-icon slot="icon">refresh</md-icon>
+          重新整理
+        </md-filled-button>
+      </form>
+    </section>
+
+    <section class="status-row" aria-live="polite">
+      <md-assist-chip id="period-label" label="載入期間中"></md-assist-chip>
+      <md-assist-chip id="generated-label" label="準備分析資料"></md-assist-chip>
+    </section>
+
+    <section class="summary-grid" id="summaryGrid"></section>
+
+    <section class="split-grid">
+      <article class="m3-card">
+        <div class="panel-title-row">
+          <h2 class="m3-card-title md-typescale-title-medium">
+            <md-icon>trending_up</md-icon>
+            每日請求
+          </h2>
+          <span class="caption" id="daily-caption">Recent trend</span>
+        </div>
+        <div id="dailyBars"></div>
+      </article>
+
+      <article class="m3-card">
+        <div class="panel-title-row">
+          <h2 class="m3-card-title md-typescale-title-medium">
+            <md-icon>devices</md-icon>
+            Client mix
+          </h2>
+          <span class="caption">Family, platform, system</span>
+        </div>
+        <div>
+          <div id="clientChips" class="chip-group"></div>
+          <div id="platformChips" class="chip-group" style="margin-top: 12px;"></div>
+          <div id="systemChips" class="chip-group" style="margin-top: 12px;"></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="m3-card">
+      <div class="panel-title-row">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>route</md-icon>
+          Top endpoints
+        </h2>
+        <span class="caption">Grouped by route template</span>
+      </div>
+      <div class="table-wrap" id="endpointTable"></div>
+    </section>
+
+    <section class="m3-card">
+      <div class="panel-title-row">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>phone_iphone</md-icon>
+          App clients
+        </h2>
+        <span class="caption">YABus version, platform, endpoint</span>
+      </div>
+      <div class="table-wrap" id="appTable"></div>
+    </section>
+
+    <section class="m3-card">
+      <div class="panel-title-row">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>language</md-icon>
+          Web clients
+        </h2>
+        <span class="caption">Browser, system, endpoint</span>
+      </div>
+      <div class="table-wrap" id="webTable"></div>
+    </section>
+
+    <section class="m3-card">
+      <div class="panel-title-row">
+        <h2 class="m3-card-title md-typescale-title-medium">
+          <md-icon>history</md-icon>
+          Recent requests
+        </h2>
+        <span class="caption">Last sampled hits</span>
+      </div>
+      <div class="table-wrap" id="recentTable"></div>
+    </section>
+  </main>
+
+  <script>
+    const AUTH_TOKEN_COOKIE = "yabus_auth_token";
+    const SESSION_KEY = "yabus_auth_session";
+
+    const filtersForm = document.getElementById("filters");
+    const daysInput = document.getElementById("days");
+    const limitInput = document.getElementById("limit");
+
+    function readSession() {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) {
+        return null;
+      }
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
+
+    function readCookieToken() {
+      const prefix = `${AUTH_TOKEN_COOKIE}=`;
+      const match = document.cookie.split("; ").find((entry) => entry.startsWith(prefix));
+      return match ? decodeURIComponent(match.slice(prefix.length)) : "";
+    }
+
+    function token() {
+      const session = readSession();
+      return (session && session.token) || readCookieToken() || "";
+    }
+
+    function authHeaders(extra = {}) {
+      const current = token();
+      return current ? { Authorization: `Bearer ${current}`, ...extra } : extra;
+    }
+
+    function escapeHtml(value) {
+      const node = document.createElement("div");
+      node.textContent = value ?? "";
+      return node.innerHTML;
+    }
+
+    function formatNumber(value) {
+      return new Intl.NumberFormat().format(Number(value ?? 0));
+    }
+
+    function formatTime(unixSeconds) {
+      if (!unixSeconds) {
+        return "n/a";
+      }
+      return new Date(Number(unixSeconds) * 1000).toLocaleString();
+    }
+
+    function setChipLabel(id, label) {
+      document.getElementById(id).setAttribute("label", label);
+    }
+
+    function readFiltersFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const days = params.get("days") || "7";
+      const limit = params.get("limit") || "20";
+      daysInput.value = days;
+      limitInput.value = limit;
+      return { days, limit };
+    }
+
+    function writeFiltersToUrl(days, limit) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("days", days);
+      url.searchParams.set("limit", limit);
+      window.history.replaceState({}, "", url);
+    }
+
+    function renderSummary(summary) {
+      const cards = [
+        ["Total requests", formatNumber(summary.total_requests), "Selected period"],
+        ["Endpoints", formatNumber(summary.unique_endpoints), "Unique route templates"],
+        ["User agents", formatNumber(summary.unique_user_agents), "Distinct raw user agents"],
+        ["App versions", formatNumber(summary.unique_app_versions), "YABus versions"],
+        ["Browsers", formatNumber(summary.unique_browsers), "Browser families"],
+        ["Last seen", escapeHtml(formatTime(summary.last_seen_at)), "Most recent request"],
+      ];
+
+      document.getElementById("summaryGrid").innerHTML = cards.map(([label, value, hint]) => `
+        <article class="summary-item">
+          <div class="summary-label">${escapeHtml(label)}</div>
+          <div class="summary-value">${value}</div>
+          <div class="summary-hint">${escapeHtml(hint)}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderBars(rows) {
+      const target = document.getElementById("dailyBars");
+      if (!rows.length) {
+        target.innerHTML = '<div class="empty">這個期間還沒有 request data。</div>';
+        return;
+      }
+
+      const maxCount = Math.max(...rows.map((row) => Number(row.request_count || 0)), 1);
+      target.innerHTML = `
+        <div class="bars">
+          ${rows.map((row) => {
+            const count = Number(row.request_count || 0);
+            const width = Math.max(4, (count / maxCount) * 100);
+            return `
+              <div class="bar-row">
+                <div class="bar-meta">
+                  <span>${escapeHtml(row.date)}</span>
+                  <strong>${formatNumber(count)}</strong>
+                </div>
+                <div class="bar-track">
+                  <div class="bar-fill" style="width: ${width}%"></div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function renderChips(targetId, rows, labelKey, valueFormatter) {
+      const target = document.getElementById(targetId);
+      if (!rows.length) {
+        target.innerHTML = '<div class="empty">沒有符合條件的資料。</div>';
+        return;
+      }
+
+      target.innerHTML = rows.map((row) => `
+        <span class="data-chip">${escapeHtml(valueFormatter(row[labelKey], row))}<strong>${formatNumber(row.request_count)}</strong></span>
+      `).join("");
+    }
+
+    function renderTable(targetId, columns, rows) {
+      const target = document.getElementById(targetId);
+      if (!rows.length) {
+        target.innerHTML = '<div class="empty">沒有符合條件的資料。</div>';
+        return;
+      }
+
+      const head = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
+      const body = rows.map((row) => `
+        <tr>
+          ${columns.map((column) => `<td>${column.render(row)}</td>`).join("")}
+        </tr>
+      `).join("");
+
+      target.innerHTML = `
+        <table>
+          <thead><tr>${head}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+    }
+
+    function codeCell(value) {
+      return `<code>${escapeHtml(value || "n/a")}</code>`;
+    }
+
+    function textCell(value) {
+      return escapeHtml(value || "n/a");
+    }
+
+    function endpointCell(value) {
+      return `<code>${escapeHtml(value || "n/a")}</code>`;
+    }
+
+    function detailCell(parts) {
+      const filtered = parts.filter((part) => part !== undefined && part !== null && String(part).trim() !== "");
+      return filtered.length ? escapeHtml(filtered.join(" / ")) : '<span class="muted">n/a</span>';
+    }
+
+    function renderError(error) {
+      const message = escapeHtml(error?.message || "Unknown error");
+      document.getElementById("summaryGrid").innerHTML = `<div class="notice error">${message}</div>`;
+      document.getElementById("dailyBars").innerHTML = `<div class="notice error">${message}</div>`;
+      document.getElementById("clientChips").innerHTML = "";
+      document.getElementById("platformChips").innerHTML = "";
+      document.getElementById("systemChips").innerHTML = "";
+      document.getElementById("endpointTable").innerHTML = `<div class="notice error">${message}</div>`;
+      document.getElementById("appTable").innerHTML = `<div class="notice error">${message}</div>`;
+      document.getElementById("webTable").innerHTML = `<div class="notice error">${message}</div>`;
+      document.getElementById("recentTable").innerHTML = `<div class="notice error">${message}</div>`;
+      setChipLabel("generated-label", "載入失敗");
+    }
+
+    async function loadDashboard() {
+      const { days, limit } = readFiltersFromUrl();
+      writeFiltersToUrl(days, limit);
+
+      setChipLabel("period-label", Number(days) > 0 ? `最近 ${days} 天` : "全部資料");
+      setChipLabel("generated-label", "載入分析資料中");
+      document.getElementById("daily-caption").textContent = Number(days) > 0
+        ? `${days} day window`
+        : "All-time trend sample";
+
+      try {
+        const response = await fetch(`/api/v1/admin/analytics?days=${encodeURIComponent(days)}&limit=${encodeURIComponent(limit)}`, {
+          headers: authHeaders({ Accept: "application/json" }),
+        });
+
+        if (response.status === 401) {
+          window.location.replace("/auth");
+          return;
+        }
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        setChipLabel("generated-label", `Generated ${formatTime(data.generated_at)}`);
+
+        renderSummary(data.summary || {});
+        renderBars(data.daily || []);
+        renderChips("clientChips", data.client_types || [], "client_type", (value) => value || "unknown");
+        renderChips("platformChips", data.platforms || [], "platform", (value) => value || "unknown");
+        renderChips("systemChips", data.systems || [], "system", (value, row) => [value, row.system_version].filter(Boolean).join(" ") || "unknown");
+
+        renderTable("endpointTable", [
+          { label: "Endpoint", render: (row) => endpointCell(row.endpoint) },
+          { label: "Requests", render: (row) => formatNumber(row.request_count) },
+          { label: "App", render: (row) => formatNumber(row.app_requests) },
+          { label: "Web", render: (row) => formatNumber(row.web_requests) },
+          { label: "Unknown", render: (row) => formatNumber(row.unknown_requests) },
+          { label: "Last seen", render: (row) => textCell(formatTime(row.last_seen_at)) },
+        ], data.endpoints || []);
+
+        renderTable("appTable", [
+          { label: "Version", render: (row) => codeCell(row.app_version) },
+          { label: "Commit", render: (row) => codeCell(row.app_commit_hash || "n/a") },
+          { label: "Platform / System", render: (row) => detailCell([row.platform, row.system]) },
+          { label: "Endpoint", render: (row) => endpointCell(row.endpoint) },
+          { label: "Requests", render: (row) => formatNumber(row.request_count) },
+          { label: "Last seen", render: (row) => textCell(formatTime(row.last_seen_at)) },
+        ], data.app_usage || []);
+
+        renderTable("webTable", [
+          { label: "Browser", render: (row) => detailCell([row.browser_name, row.browser_version]) },
+          { label: "Platform", render: (row) => textCell(row.platform) },
+          { label: "System", render: (row) => detailCell([row.system, row.system_version]) },
+          { label: "Endpoint", render: (row) => endpointCell(row.endpoint) },
+          { label: "Requests", render: (row) => formatNumber(row.request_count) },
+          { label: "Last seen", render: (row) => textCell(formatTime(row.last_seen_at)) },
+        ], data.web_usage || []);
+
+        renderTable("recentTable", [
+          { label: "Seen at", render: (row) => textCell(formatTime(row.requested_at)) },
+          { label: "Method / Status", render: (row) => detailCell([row.method, String(row.status_code ?? "n/a")]) },
+          { label: "Client", render: (row) => detailCell([row.client_type, row.platform, row.system, row.system_version]) },
+          { label: "Version", render: (row) => detailCell([row.app_version, row.browser_name, row.browser_version]) },
+          { label: "Endpoint", render: (row) => endpointCell(row.endpoint) },
+          { label: "User-Agent", render: (row) => codeCell(row.user_agent) },
+        ], data.recent_requests || []);
+      } catch (error) {
+        renderError(error);
+      }
+    }
+
+    filtersForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      writeFiltersToUrl(daysInput.value || "7", limitInput.value || "20");
+      loadDashboard();
+    });
+
+    document.getElementById("tabAnalytics").addEventListener("click", () => window.location.href = "/admin/analytics");
+    document.getElementById("tabAnnouncements").addEventListener("click", () => window.location.href = "/admin/announcements");
+    document.getElementById("tabUsers").addEventListener("click", () => window.location.href = "/admin/user_manage");
+    document.getElementById("tabFeedbacks").addEventListener("click", () => window.location.href = "/admin/feedbacks");
+    document.getElementById("tabAccount").addEventListener("click", () => window.location.href = "/account");
+
+    loadDashboard();
+  </script>
+</body>
+</html>
