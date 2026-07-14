@@ -155,7 +155,7 @@ class AccountSyncApiTests(unittest.TestCase):
             )
         self.assertEqual(put_error.exception.status_code, 401)
 
-    def test_favorites_sync_creates_document_prunes_empty_groups_and_sets_headers(self) -> None:
+    def test_favorites_sync_creates_document_preserves_empty_groups_and_sets_headers(self) -> None:
         account_id = self._create_account()
         self._set_principal(account_id)
 
@@ -189,20 +189,24 @@ class AccountSyncApiTests(unittest.TestCase):
         assert isinstance(document, dict)
         self.assertTrue(document["has_data"])
         self.assertEqual(document["revision"], 1)
-        self.assertEqual(document["payload"]["groups"], {  # type: ignore[index]
-            "通勤": [
-                {
-                    "provider": "tpe",
-                    "routeKey": 123,
-                    "pathId": 0,
-                    "stopId": 456,
-                    "routeName": "紅 12",
-                    "stopName": "市政府",
-                    "destinationPathId": 0,
-                    "destinationStopId": 789,
-                }
-            ]
-        })
+        self.assertEqual(
+            document["payload"]["groups"],  # type: ignore[index]
+            {
+                "通勤": [
+                    {
+                        "provider": "tpe",
+                        "routeKey": 123,
+                        "pathId": 0,
+                        "stopId": 456,
+                        "routeName": "紅 12",
+                        "stopName": "市政府",
+                        "destinationPathId": 0,
+                        "destinationStopId": 789,
+                    }
+                ],
+                "空分類": [],
+            },
+        )
         self.assertIn("ETag", response.headers)
         self.assertIn("Last-Modified", response.headers)
         self.assertEqual(response.headers["X-YABUS-Sync-Revision"], "1")
@@ -297,6 +301,44 @@ class AccountSyncApiTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 422)
         self.assertIn("maximum of 25 items", context.exception.detail)
+
+    def test_favorites_merge_preserves_new_empty_group(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        favorite = {
+            "provider": "tpe",
+            "routeKey": 123,
+            "pathId": 0,
+            "stopId": 456,
+        }
+
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:00:00Z",
+                "payload": {"groups": {"Existing group": [favorite]}},
+            },
+        )
+        response, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:05:00Z",
+                "conflict_policy": "merge",
+                "payload": {"groups": {"New group": []}},
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["status"], "merged")
+        self.assertEqual(
+            result["document"]["payload"]["groups"],  # type: ignore[index]
+            {
+                "Existing group": [favorite],
+                "New group": [],
+            },
+        )
 
     def test_request_size_limit_is_enforced(self) -> None:
         account_id = self._create_account()

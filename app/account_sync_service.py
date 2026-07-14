@@ -240,7 +240,11 @@ def upsert_sync_document(
                 conflict_policy=conflict_policy,
             )
 
-        base_matches = _base_matches(current, base_revision=base_revision, base_etag=base_etag)
+        base_matches = base_provided and _base_matches(
+            current,
+            base_revision=base_revision,
+            base_etag=base_etag,
+        )
         if base_matches:
             updated = _write_sync_document(
                 connection,
@@ -521,8 +525,7 @@ def _merge_favorites_payloads(
             )
             merged_items[positions[item_key]] = merged_item
 
-        if merged_items:
-            merged_groups[group_name] = merged_items
+        merged_groups[group_name] = merged_items
 
     return _normalize_favorites_payload(settings, {"groups": merged_groups})
 
@@ -670,9 +673,8 @@ def _normalize_favorites_payload(settings: Settings, payload: dict[str, Any]) ->
             seen_items.add(item_key)
             normalized_items.append(normalized_item)
 
-        if normalized_items:
-            normalized_groups[group_name] = normalized_items
-            total_favorites += len(normalized_items)
+        normalized_groups[group_name] = normalized_items
+        total_favorites += len(normalized_items)
 
     if total_favorites > settings.account_sync_max_favorites:
         raise SyncValidationError(
