@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import math
+from pathlib import Path
 import re
 import threading
 import time
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 
 from app.db import get_connection, load_database_version, load_path_points, load_route_static, path_exists, route_exists
 from app.config import CITY_NAME_TO_PREFIX, CITY_PREFIX_TO_NAME, guess_city_from_routeid
@@ -18,6 +19,7 @@ from app.rate_limit import enforce_rate_limit
 from app.sync_realtime import RouteNotFoundError
 
 LOGGER = get_logger("routes")
+WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 
 
 router = APIRouter(tags=["Bus"], dependencies=[Depends(enforce_rate_limit)])
@@ -349,10 +351,14 @@ def _load_nearby_stops(
     return results[:limit]
 
 
-@router.get("/")
-def root() -> dict:
-    # redirect to main app
-    return RedirectResponse(url="https://busapp.avianjay.sbs/")
+@router.get("/", include_in_schema=False)
+def root() -> FileResponse:
+    return FileResponse(WEB_ROOT / "index.html", media_type="text/html")
+
+
+@router.get("/brand/icon.png", include_in_schema=False)
+def brand_icon() -> FileResponse:
+    return FileResponse(WEB_ROOT / "static" / "icon_transparent.png", media_type="image/png")
 
 
 @router.get("/downloads/bus.db")

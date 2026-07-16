@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#101513" />
+  <meta name="application-name" content="YetAnotherBusApp" />
+  <meta name="description" content="YetAnotherBusApp（YABus）提供台灣公車路線、站牌、即時到站資訊與帳戶同步功能。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="YetAnotherBusApp" />
+  <meta property="og:description" content="查詢台灣公車路線、站牌與即時到站資訊。" />
+  <meta property="og:image" content="/brand/icon.png" />
+  <title>YetAnotherBusApp | 台灣公車即時資訊</title>
+  <link rel="icon" href="/brand/icon.png" type="image/png" />
+
+  <style>
+    :root {
+      color-scheme: dark;
+      --surface: #101513;
+      --surface-raised: #19211e;
+      --surface-soft: #222c28;
+      --text: #f4f7f5;
+      --text-muted: #b9c5c0;
+      --line: #35423d;
+      --brand: #55b9c8;
+      --brand-dark: #073b43;
+      --signal: #fff200;
+      --warm: #ff9a5a;
+      --paper: #f1eee8;
+      --ink: #18201d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--surface);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .site-header {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      width: min(1120px, calc(100% - 40px));
+      min-height: 72px;
+      margin: 0 auto;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand-lockup {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text);
+      font-size: 1rem;
+      font-weight: 750;
+      text-decoration: none;
+    }
+
+    .brand-lockup img {
+      width: 38px;
+      height: 38px;
+      object-fit: contain;
+    }
+
+    .site-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .nav-link,
+    .nav-login,
+    .nav-app {
+      display: inline-flex;
+      min-height: 40px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      padding: 9px 12px;
+      color: var(--text-muted);
+      font-size: 0.86rem;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .nav-link:hover,
+    .nav-link:focus-visible {
+      background: var(--surface-raised);
+      color: var(--text);
+    }
+
+    .nav-login {
+      margin-left: 4px;
+      border: 1px solid var(--line);
+      color: var(--text);
+    }
+
+    .nav-login:hover,
+    .nav-login:focus-visible {
+      border-color: var(--brand);
+      background: var(--surface-raised);
+    }
+
+    .nav-app {
+      margin-left: 4px;
+      background: var(--signal);
+      color: #151a18;
+    }
+
+    .nav-app:hover,
+    .nav-app:focus-visible {
+      background: #fff86a;
+    }
+
+    .menu-toggle {
+      display: none;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--surface-raised);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+
+    .hero {
+      display: grid;
+      min-height: min(760px, calc(100svh - 72px));
+      place-items: center;
+      padding: 48px 20px 76px;
+      overflow: hidden;
+      text-align: center;
+    }
+
+    .hero-content {
+      width: min(820px, 100%);
+    }
+
+    .app-icon {
+      display: block;
+      width: clamp(132px, 18vw, 210px);
+      height: auto;
+      margin: 0 auto 28px;
+      filter: drop-shadow(0 22px 36px rgba(0, 0, 0, 0.28));
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 18px;
+      color: var(--brand);
+      font-size: 0.78rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 28px;
+      height: 3px;
+      background: var(--signal);
+      content: "";
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: 18px;
+      font-size: 5rem;
+      line-height: 0.96;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .hero-copy {
+      max-width: 680px;
+      margin: 0 auto;
+      color: var(--text-muted);
+      font-size: 1.25rem;
+      line-height: 1.75;
+    }
+
+    .hero-copy strong {
+      color: var(--text);
+      font-weight: 750;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 32px;
+    }
+
+    .primary-action,
+    .secondary-action {
+      display: inline-flex;
+      min-height: 62px;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      border-radius: 6px;
+      padding: 17px 24px;
+      font-weight: 800;
+      text-decoration: none;
+      transition: transform 160ms ease, background-color 160ms ease, color 160ms ease;
+    }
+
+    .primary-action {
+      background: var(--signal);
+      color: #151a18;
+      box-shadow: 0 8px 0 #9d9500;
+      font-size: 1.05rem;
+    }
+
+    .primary-action span {
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+
+    .secondary-action {
+      border: 1px solid var(--line);
+      background: var(--surface-raised);
+      color: var(--text);
+    }
+
+    .primary-action:hover,
+    .secondary-action:hover {
+      transform: translateY(-2px);
+    }
+
+    .primary-action:focus-visible,
+    .secondary-action:focus-visible,
+    .footer-links a:focus-visible,
+    .brand-lockup:focus-visible,
+    .nav-link:focus-visible,
+    .nav-login:focus-visible,
+    .nav-app:focus-visible,
+    .menu-toggle:focus-visible {
+      outline: 3px solid var(--warm);
+      outline-offset: 4px;
+    }
+
+    .purpose {
+      border-top: 1px solid var(--line);
+      background: var(--surface-raised);
+    }
+
+    .section-inner {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 84px 0;
+    }
+
+    .section-heading {
+      display: grid;
+      grid-template-columns: minmax(0, 0.8fr) minmax(280px, 1.2fr);
+      gap: 48px;
+      align-items: end;
+      margin-bottom: 56px;
+    }
+
+    .section-heading h2,
+    .oauth-copy h2 {
+      margin-bottom: 0;
+      font-size: 3.5rem;
+      line-height: 1.08;
+    }
+
+    .section-heading p {
+      margin-bottom: 0;
+      color: var(--text-muted);
+      font-size: 1.03rem;
+      line-height: 1.75;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+    }
+
+    .feature {
+      min-width: 0;
+      padding: 28px 26px 8px 0;
+    }
+
+    .feature + .feature {
+      border-left: 1px solid var(--line);
+      padding-left: 26px;
+    }
+
+    .feature-number {
+      display: block;
+      margin-bottom: 40px;
+      color: var(--warm);
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    .feature h3 {
+      margin-bottom: 12px;
+      font-size: 1.25rem;
+    }
+
+    .feature p {
+      margin-bottom: 0;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    .oauth {
+      background: var(--paper);
+      color: var(--ink);
+    }
+
+    .oauth-inner {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+      gap: 72px;
+      align-items: start;
+    }
+
+    .oauth-copy .eyebrow {
+      color: var(--brand-dark);
+    }
+
+    .oauth-details {
+      border-top: 2px solid var(--ink);
+    }
+
+    .oauth-item {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 24px;
+      padding: 22px 0;
+      border-bottom: 1px solid #b8b3aa;
+    }
+
+    .oauth-item h3,
+    .oauth-item p {
+      margin: 0;
+    }
+
+    .oauth-item h3 {
+      font-size: 0.82rem;
+      text-transform: uppercase;
+    }
+
+    .oauth-item p {
+      color: #46504c;
+      line-height: 1.65;
+    }
+
+    .site-footer {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 32px 0 44px;
+    }
+
+    .footer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .site-footer p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .footer-links a {
+      color: var(--text);
+      font-size: 0.88rem;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    @media (max-width: 760px) {
+      .site-header {
+        width: min(100% - 28px, 1120px);
+        min-height: 64px;
+      }
+
+      .brand-lockup {
+        font-size: 0.88rem;
+      }
+
+      .brand-lockup img {
+        width: 34px;
+        height: 34px;
+      }
+
+      .menu-toggle {
+        display: grid;
+      }
+
+      .site-nav {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        left: 0;
+        display: none;
+        align-items: stretch;
+        flex-direction: column;
+        gap: 4px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-raised);
+        padding: 10px;
+        box-shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
+      }
+
+      .site-nav[data-open="true"] {
+        display: flex;
+      }
+
+      .nav-link,
+      .nav-login,
+      .nav-app {
+        width: 100%;
+        min-height: 46px;
+        margin-left: 0;
+      }
+
+      .nav-link {
+        justify-content: flex-start;
+      }
+
+      .hero {
+        min-height: calc(100svh - 104px);
+        padding: 38px 18px 58px;
+      }
+
+      .app-icon {
+        width: 128px;
+        margin-bottom: 22px;
+      }
+
+      h1 {
+        font-size: 2rem;
+        line-height: 1;
+      }
+
+      .hero-copy {
+        font-size: 1.05rem;
+      }
+
+      .section-heading h2,
+      .oauth-copy h2 {
+        font-size: 2.25rem;
+      }
+
+      .hero-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .primary-action,
+      .secondary-action {
+        width: 100%;
+      }
+
+      .section-inner {
+        width: min(100% - 32px, 1120px);
+        padding: 64px 0;
+      }
+
+      .section-heading,
+      .oauth-inner {
+        grid-template-columns: 1fr;
+        gap: 28px;
+      }
+
+      .section-heading {
+        margin-bottom: 36px;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .feature {
+        padding: 24px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .feature + .feature {
+        border-left: 0;
+        padding-left: 0;
+      }
+
+      .feature-number {
+        margin-bottom: 18px;
+      }
+
+      .oauth-item {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      .footer-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+
+    @media (max-width: 360px) {
+      .site-header {
+        width: calc(100% - 20px);
+        min-height: 56px;
+      }
+
+      .brand-lockup {
+        gap: 8px;
+        font-size: 0.78rem;
+      }
+
+      .brand-lockup img {
+        width: 30px;
+        height: 30px;
+      }
+
+      .menu-toggle {
+        width: 38px;
+        height: 38px;
+      }
+
+      .hero {
+        min-height: calc(100svh - 96px);
+        padding: 24px 12px 28px;
+      }
+
+      .app-icon {
+        width: 92px;
+        margin-bottom: 14px;
+      }
+
+      .eyebrow {
+        gap: 7px;
+        margin-bottom: 12px;
+        font-size: 0.68rem;
+      }
+
+      h1 {
+        margin-bottom: 12px;
+        font-size: 1.72rem;
+      }
+
+      .hero-copy {
+        font-size: 0.93rem;
+        line-height: 1.55;
+      }
+
+      .hero-actions {
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .primary-action,
+      .secondary-action {
+        min-height: 50px;
+        padding: 12px 14px;
+        font-size: 0.9rem;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      .primary-action,
+      .secondary-action {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header class="site-header">
+    <a class="brand-lockup" href="/" aria-label="YetAnotherBusApp 首頁">
+      <img src="/brand/icon.png" alt="" width="38" height="38" />
+      <span>YetAnotherBusApp</span>
+    </a>
+    <button
+      class="menu-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="site-nav"
+      aria-label="開啟導覽選單"
+      title="開啟導覽選單"
+    >☰</button>
+    <nav class="site-nav" id="site-nav" data-open="false" aria-label="主要導覽">
+      <a class="nav-link" href="#features">功能</a>
+      <a class="nav-link" href="#account">帳戶說明</a>
+      <a class="nav-link" href="/privacy-policy">隱私權</a>
+      <a class="nav-login" href="/auth">登入</a>
+      <a class="nav-app" href="https://busapp.avianjay.sbs/" rel="noopener">開啟 App</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-content">
+        <img class="app-icon" src="/brand/icon.png" alt="YetAnotherBusApp 的公車圖示" width="210" height="210" />
+        <p class="eyebrow">Taiwan public transit</p>
+        <h1 id="page-title">YetAnotherBusApp</h1>
+        <p class="hero-copy">
+          <strong>查公車，直接一點。</strong> YABus 是一款以 Flutter 打造的台灣大眾運輸應用程式，
+          提供公車路線、站牌、即時到站資訊與收藏功能。
+        </p>
+        <div class="hero-actions">
+          <a class="primary-action" href="https://busapp.avianjay.sbs/" rel="noopener">
+            開啟 YetAnotherBusApp 網頁版
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a class="secondary-action" href="https://github.com/AvianJay/yetanotherbusapp" rel="noopener">
+            查看開放原始碼
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section class="purpose" id="features" aria-labelledby="purpose-title">
+      <div class="section-inner">
+        <div class="section-heading">
+          <h2 id="purpose-title">應用程式用途</h2>
+          <p>
+            YetAnotherBusApp 協助使用者在台灣搭乘大眾運輸時，快速找到路線、站牌與車輛動態。
+            首頁與基本查詢不需要登入。
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-number">01 / ROUTES</span>
+            <h3>路線與站牌查詢</h3>
+            <p>依城市、路線或站牌尋找所需資訊，查看行駛方向與停靠順序。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">02 / REALTIME</span>
+            <h3>即時到站資訊</h3>
+            <p>顯示公車預估到站時間與車輛動態，協助使用者安排候車時間。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">03 / FAVORITES</span>
+            <h3>收藏與偏好設定</h3>
+            <p>收藏常用站牌與路線；登入後可選擇同步最愛站牌和偏好設定。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="oauth" id="account" aria-labelledby="oauth-title">
+      <div class="section-inner oauth-inner">
+        <div class="oauth-copy">
+          <p class="eyebrow">Account and OAuth</p>
+          <h2 id="oauth-title">帳戶登入如何使用</h2>
+        </div>
+
+        <div class="oauth-details">
+          <article class="oauth-item">
+            <h3>應用程式名稱</h3>
+            <p>YetAnotherBusApp（YABus）是本服務對使用者公開顯示的正式名稱。</p>
+          </article>
+          <article class="oauth-item">
+            <h3>登入用途</h3>
+            <p>Google 或 Discord OAuth 登入為選用功能，用於識別帳戶及同步最愛站牌與偏好設定。</p>
+          </article>
+          <article class="oauth-item">
+            <h3>資料說明</h3>
+            <p>服務不會取得或儲存第三方帳戶密碼。授權資料的使用方式請參閱隱私權政策。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-row">
+      <p>© 2026 YetAnotherBusApp. Transit data is provided by public data sources.</p>
+      <nav class="footer-links" aria-label="服務資訊">
+        <a href="/privacy-policy">隱私權政策</a>
+        <a href="/terms-of-service">服務條款</a>
+        <a href="mailto:feedback@avianjay.sbs">聯絡我們</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    const menuToggle = document.querySelector(".menu-toggle");
+    const siteNav = document.getElementById("site-nav");
+
+    function setMenuOpen(open) {
+      siteNav.dataset.open = String(open);
+      menuToggle.setAttribute("aria-expanded", String(open));
+      menuToggle.setAttribute("aria-label", open ? "關閉導覽選單" : "開啟導覽選單");
+      menuToggle.title = open ? "關閉導覽選單" : "開啟導覽選單";
+      menuToggle.textContent = open ? "×" : "☰";
+    }
+
+    menuToggle.addEventListener("click", () => {
+      setMenuOpen(menuToggle.getAttribute("aria-expanded") !== "true");
+    });
+
+    siteNav.addEventListener("click", (event) => {
+      if (event.target.closest("a")) {
+        setMenuOpen(false);
+      }
+    });
+
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 760) {
+        setMenuOpen(false);
+      }
+    });
+  </script>
+</body>
+
+</html>
