@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.db import get_connection
 from app.fcm import send_announcement_push
-from app.rate_limit import enforce_rate_limit, get_request_principal
+from app.rate_limit import check_rate_limit, enforce_rate_limit, get_request_principal
 from app.request_analytics import parse_user_agent
 
 
@@ -22,6 +22,11 @@ _ALLOWED_BEHAVIORS = {"none", "once", "forever"}
 _ALLOWED_PLATFORMS = {"android", "ios", "windows", "macos", "linux", "web"}
 _ALLOWED_EDITOR_ROLES = {"mod", "admin"}
 _VERSION_PART_PATTERN = re.compile(r"^(>=|<=|>|<|==|=)?\s*(\d+(?:\.\d+)*)$")
+
+_MAX_REACTION_EMOJI_LENGTH = 32
+_REACTION_LIMIT_REQUESTS = 30
+_REACTION_LIMIT_WINDOW_SECONDS = 60
+_REACTION_LIMIT_DETAIL = "Too many reactions. Please slow down."
 
 
 class AnnouncementBehaviorPayload(BaseModel):
@@ -192,6 +197,25 @@ class AnnouncementUpdateRequest(BaseModel):
         return self
 
 
+class ReactionToggleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    emoji: str = Field(min_length=1, max_length=_MAX_REACTION_EMOJI_LENGTH)
+
+    @field_validator("emoji")
+    @classmethod
+    def _validate_emoji(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Emoji must not be empty.")
+        if len(normalized) > _MAX_REACTION_EMOJI_LENGTH:
+            raise ValueError("Emoji is too long.")
+        # Reject plain alphanumeric/ASCII-word input; reactions are emoji glyphs.
+        if any(char.isalnum() and char.isascii() for char in normalized):
+            raise ValueError("Reaction must be an emoji.")
+        return normalized
+
+
 @router.get("/announcements", include_in_schema=False, response_model=None)
 def legacy_announcements_page() -> RedirectResponse:
     return RedirectResponse("/admin/announcements", status_code=302)
@@ -236,6 +260,7 @@ def list_announcements(
     platform: str = "",
     version: str = "",
 ) -> list[dict[str, Any]]:
+    principal = get_request_principal(request)
     resolved_platform, resolved_version = _resolve_client_target(
         request,
         platform=platform,
@@ -265,7 +290,16 @@ def list_announcements(
             (now,),
         ).fetchall()
 
-    announcements = [_row_to_announcement(row) for row in rows]
+        reactions_map = _aggregate_reactions_map(connection)
+        my_reactions_map = (
+            _my_reactions_map(connection, principal.account_id)
+            if principal is not None
+            else None
+        )
+
+    announcements = [
+        _row_to_announcement(row, reactions_map, my_reactions_map) for row in rows
+    ]
     return [
         announcement
         for announcement in announcements
@@ -360,6 +394,67 @@ def update_announcement(
         _upsert_announcement(connection, updated, updated_at=now)
         connection.commit()
     return updated
+
+
+@router.post("/api/v1/announcements/{announcement_id}/reactions/toggle")
+def toggle_announcement_reaction(
+    announcement_id: str,
+    request: Request,
+    payload: ReactionToggleRequest,
+) -> dict[str, Any]:
+    principal = get_request_principal(request)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    check_rate_limit(
+        f"user:{principal.account_id}",
+        "announcement-react",
+        requests=_REACTION_LIMIT_REQUESTS,
+        window_seconds=_REACTION_LIMIT_WINDOW_SECONDS,
+        detail=_REACTION_LIMIT_DETAIL,
+    )
+
+    emoji = payload.emoji
+    now = int(time.time())
+    with get_connection(request.app.state.settings.app_db_path) as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM announcements WHERE id = ?",
+            (announcement_id,),
+        ).fetchone()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Announcement not found.")
+
+        deleted = connection.execute(
+            """
+            DELETE FROM announcement_reactions
+            WHERE announcement_id = ? AND account_id = ? AND emoji = ?
+            """,
+            (announcement_id, principal.account_id, emoji),
+        )
+        if deleted.rowcount == 0:
+            connection.execute(
+                """
+                INSERT INTO announcement_reactions
+                    (announcement_id, account_id, emoji, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (announcement_id, principal.account_id, emoji, now),
+            )
+        connection.commit()
+
+        reactions = _aggregate_reactions_map(connection, announcement_id).get(
+            announcement_id, []
+        )
+        my_reactions = _my_reactions_map(
+            connection, principal.account_id, announcement_id
+        ).get(announcement_id, [])
+
+    return {
+        "ok": True,
+        "announcement_id": announcement_id,
+        "reactions": reactions,
+        "my_reactions": my_reactions,
+    }
 
 
 def _require_editor(request: Request):
@@ -503,9 +598,14 @@ def _upsert_announcement(
     )
 
 
-def _row_to_announcement(row) -> dict[str, Any]:
+def _row_to_announcement(
+    row,
+    reactions_map: dict[str, list[dict[str, Any]]] | None = None,
+    my_reactions_map: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    ann_id = row["id"]
     return {
-        "id": row["id"],
+        "id": ann_id,
         "title": row["title"],
         "content": row["content"],
         "content_type": row["content_type"],
@@ -520,7 +620,75 @@ def _row_to_announcement(row) -> dict[str, Any]:
         "sound_url": row["sound_url"],
         "embed": _json_loads(row["embed_json"]),
         "actions": _json_loads(row["actions_json"]),
+        "reactions": reactions_map.get(ann_id, []) if reactions_map is not None else [],
+        "my_reactions": (
+            my_reactions_map.get(ann_id, []) if my_reactions_map is not None else []
+        ),
     }
+
+
+def _aggregate_reactions_map(
+    connection,
+    announcement_id: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Map announcement_id -> [{"emoji", "count"}, ...], ordered by popularity.
+
+    When ``announcement_id`` is given, only that announcement is aggregated.
+    """
+    if announcement_id is None:
+        rows = connection.execute(
+            """
+            SELECT announcement_id, emoji, COUNT(*) AS count
+            FROM announcement_reactions
+            GROUP BY announcement_id, emoji
+            ORDER BY count DESC, emoji ASC
+            """,
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """
+            SELECT announcement_id, emoji, COUNT(*) AS count
+            FROM announcement_reactions
+            WHERE announcement_id = ?
+            GROUP BY announcement_id, emoji
+            ORDER BY count DESC, emoji ASC
+            """,
+            (announcement_id,),
+        ).fetchall()
+
+    reactions_map: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        reactions_map.setdefault(row["announcement_id"], []).append(
+            {"emoji": row["emoji"], "count": int(row["count"])}
+        )
+    return reactions_map
+
+
+def _my_reactions_map(
+    connection,
+    account_id: int,
+    announcement_id: str | None = None,
+) -> dict[str, list[str]]:
+    """Map announcement_id -> [emoji, ...] reacted by ``account_id``."""
+    if announcement_id is None:
+        rows = connection.execute(
+            "SELECT announcement_id, emoji FROM announcement_reactions WHERE account_id = ?",
+            (account_id,),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """
+            SELECT announcement_id, emoji
+            FROM announcement_reactions
+            WHERE account_id = ? AND announcement_id = ?
+            """,
+            (account_id, announcement_id),
+        ).fetchall()
+
+    my_reactions_map: dict[str, list[str]] = {}
+    for row in rows:
+        my_reactions_map.setdefault(row["announcement_id"], []).append(row["emoji"])
+    return my_reactions_map
 
 
 def _json_loads(raw: str | None) -> Any:

@@ -296,6 +296,20 @@ CREATE INDEX IF NOT EXISTS idx_announcement_push_tokens_platform
     ON announcement_push_tokens(platform);
 CREATE INDEX IF NOT EXISTS idx_announcement_push_tokens_last_seen_at
     ON announcement_push_tokens(last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS announcement_reactions (
+    announcement_id TEXT    NOT NULL,
+    account_id      INTEGER NOT NULL,
+    emoji           TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (announcement_id, account_id, emoji),
+    FOREIGN KEY (announcement_id) REFERENCES announcements(id) ON DELETE CASCADE,
+    FOREIGN KEY (account_id)      REFERENCES accounts(id)      ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_announcement_reactions_announcement_id
+    ON announcement_reactions(announcement_id);
+
 CREATE TABLE IF NOT EXISTS feedbacks (
     id              INTEGER PRIMARY KEY,
     account_id      INTEGER NOT NULL,
@@ -442,6 +456,7 @@ APP_TABLES = (
     "request_analytics",
     "announcements",
     "announcement_push_tokens",
+    "announcement_reactions",
     "feedbacks",
     "account_sync_documents",
 )

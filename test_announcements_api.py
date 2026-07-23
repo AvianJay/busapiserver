@@ -4,21 +4,26 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api import announcements as announcements_api
 from app.api.announcements import (
     AnnouncementCreateRequest,
     AnnouncementUpdateRequest,
+    ReactionToggleRequest,
     create_announcement,
     list_announcements,
+    toggle_announcement_reaction,
     update_announcement,
 )
-from app.auth_service import AuthPrincipal
+from app.auth_service import AuthPrincipal, OAuthIdentity, _upsert_login
 from app.config import Settings
 from app.db import init_app_db, init_db
 from app.main import app
+from app.rate_limit import reset_rate_limit_state
 
 
 def _settings(db_path: Path) -> Settings:
@@ -66,21 +71,38 @@ class AnnouncementsApiTests(unittest.TestCase):
         self.settings = _settings(self.db_path)
         self._original_get_request_principal = announcements_api.get_request_principal
         self._original_send_announcement_push = announcements_api.send_announcement_push
+        reset_rate_limit_state()
 
     def tearDown(self) -> None:
         announcements_api.get_request_principal = self._original_get_request_principal
         announcements_api.send_announcement_push = self._original_send_announcement_push
         self.temp_dir.cleanup()
+        reset_rate_limit_state()
+
+    def _create_account(self, provider_user_id: str) -> int:
+        login = _upsert_login(
+            self.settings,
+            identity=OAuthIdentity(
+                provider="google",
+                provider_user_id=provider_user_id,
+                email=f"{provider_user_id}@example.test",
+                display_name=provider_user_id,
+                avatar_url=None,
+            ),
+            device_key=str(uuid4()),
+            redirect_uri="https://bus.example.test/account",
+        )
+        return login.account_id
 
     def _request(self, *, user_agent: str = "YABus/1.3.1-abc123 (android)") -> _FakeRequest:
         return _FakeRequest(self.settings, user_agent=user_agent)
 
-    def _set_principal(self, role: str | None) -> None:
+    def _set_principal(self, role: str | None, account_id: int = 1) -> None:
         if role is None:
             announcements_api.get_request_principal = lambda request: None
             return
         announcements_api.get_request_principal = lambda request: AuthPrincipal(
-            account_id=1,
+            account_id=account_id,
             device_id=2,
             token_id=3,
             role=role,
@@ -259,6 +281,122 @@ class AnnouncementsApiTests(unittest.TestCase):
         self.assertEqual(calls[0]["settings"], self.settings)
         self.assertEqual(calls[0]["announcement"]["id"], "push-test")
         self.assertEqual(created["push_notification"]["sent"], 2)
+
+    def _seed_announcement(self, announcement_id: str) -> str:
+        request = self._request()
+        self._set_principal("admin", account_id=1)
+        create_announcement(
+            request,
+            AnnouncementCreateRequest(
+                id=announcement_id,
+                title="Reactable",
+                content="React to me",
+            ),
+        )
+        return announcement_id
+
+    def test_toggle_reaction_requires_authentication(self) -> None:
+        self._seed_announcement("react-auth")
+        request = self._request()
+        self._set_principal(None)
+
+        with self.assertRaises(HTTPException) as denied:
+            toggle_announcement_reaction(
+                "react-auth", request, ReactionToggleRequest(emoji="👍")
+            )
+        self.assertEqual(denied.exception.status_code, 401)
+
+    def test_toggle_reaction_adds_then_removes(self) -> None:
+        self._seed_announcement("react-toggle")
+        request = self._request()
+        self._set_principal("user", account_id=self._create_account("react-user"))
+
+        added = toggle_announcement_reaction(
+            "react-toggle", request, ReactionToggleRequest(emoji="👍")
+        )
+        self.assertEqual(added["reactions"], [{"emoji": "👍", "count": 1}])
+        self.assertEqual(added["my_reactions"], ["👍"])
+
+        removed = toggle_announcement_reaction(
+            "react-toggle", request, ReactionToggleRequest(emoji="👍")
+        )
+        self.assertEqual(removed["reactions"], [])
+        self.assertEqual(removed["my_reactions"], [])
+
+    def test_toggle_reaction_two_users_same_emoji_counts_two(self) -> None:
+        self._seed_announcement("react-shared")
+        request = self._request()
+
+        self._set_principal("user", account_id=self._create_account("react-user-a"))
+        toggle_announcement_reaction(
+            "react-shared", request, ReactionToggleRequest(emoji="❤️")
+        )
+        self._set_principal("user", account_id=self._create_account("react-user-b"))
+        result = toggle_announcement_reaction(
+            "react-shared", request, ReactionToggleRequest(emoji="❤️")
+        )
+
+        self.assertEqual(result["reactions"], [{"emoji": "❤️", "count": 2}])
+        self.assertEqual(result["my_reactions"], ["❤️"])
+
+    def test_toggle_reaction_multiple_distinct_emojis_persist(self) -> None:
+        self._seed_announcement("react-multi")
+        request = self._request()
+        self._set_principal("user", account_id=self._create_account("react-multi-user"))
+
+        toggle_announcement_reaction(
+            "react-multi", request, ReactionToggleRequest(emoji="👍")
+        )
+        result = toggle_announcement_reaction(
+            "react-multi", request, ReactionToggleRequest(emoji="🎉")
+        )
+
+        self.assertEqual(
+            {item["emoji"] for item in result["reactions"]}, {"👍", "🎉"}
+        )
+        self.assertEqual(sorted(result["my_reactions"]), sorted(["👍", "🎉"]))
+
+    def test_list_includes_reactions_and_scopes_my_reactions(self) -> None:
+        self._seed_announcement("react-list")
+        request = self._request()
+        reacting_account = self._create_account("react-list-user")
+        other_account = self._create_account("react-list-other")
+        self._set_principal("user", account_id=reacting_account)
+        toggle_announcement_reaction(
+            "react-list", request, ReactionToggleRequest(emoji="👍")
+        )
+
+        # The reacting user sees their own reaction.
+        mine = list_announcements(request)[0]
+        self.assertEqual(mine["reactions"], [{"emoji": "👍", "count": 1}])
+        self.assertEqual(mine["my_reactions"], ["👍"])
+
+        # A different authenticated user sees the count but not my_reactions.
+        self._set_principal("user", account_id=other_account)
+        other = list_announcements(request)[0]
+        self.assertEqual(other["reactions"], [{"emoji": "👍", "count": 1}])
+        self.assertEqual(other["my_reactions"], [])
+
+        # An anonymous caller sees the count but no my_reactions.
+        self._set_principal(None)
+        anon = list_announcements(request)[0]
+        self.assertEqual(anon["reactions"], [{"emoji": "👍", "count": 1}])
+        self.assertEqual(anon["my_reactions"], [])
+
+    def test_toggle_reaction_missing_announcement_returns_404(self) -> None:
+        request = self._request()
+        self._set_principal("user", account_id=self._create_account("react-missing-user"))
+
+        with self.assertRaises(HTTPException) as missing:
+            toggle_announcement_reaction(
+                "does-not-exist", request, ReactionToggleRequest(emoji="👍")
+            )
+        self.assertEqual(missing.exception.status_code, 404)
+
+    def test_reaction_toggle_request_rejects_invalid_emoji(self) -> None:
+        for invalid in ("", "abc", "x" * 40):
+            with self.assertRaises(ValidationError):
+                ReactionToggleRequest(emoji=invalid)
 
 
 if __name__ == "__main__":
