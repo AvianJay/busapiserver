@@ -631,7 +631,12 @@ def _aggregate_reactions_map(
     connection,
     announcement_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Map announcement_id -> [{"emoji", "count"}, ...], ordered by popularity.
+    """Map announcement_id -> [{"emoji", "count"}, ...], in first-added order.
+
+    Reactions are ordered by when each emoji was *first* used on the
+    announcement (Discord-style): the order is stable as counts change, and a
+    newly added emoji appears at the end rather than jumping around by
+    popularity or code point. ``emoji`` breaks ties for same-second additions.
 
     When ``announcement_id`` is given, only that announcement is aggregated.
     """
@@ -641,7 +646,7 @@ def _aggregate_reactions_map(
             SELECT announcement_id, emoji, COUNT(*) AS count
             FROM announcement_reactions
             GROUP BY announcement_id, emoji
-            ORDER BY count DESC, emoji ASC
+            ORDER BY announcement_id ASC, MIN(created_at) ASC, emoji ASC
             """,
         ).fetchall()
     else:
@@ -651,7 +656,7 @@ def _aggregate_reactions_map(
             FROM announcement_reactions
             WHERE announcement_id = ?
             GROUP BY announcement_id, emoji
-            ORDER BY count DESC, emoji ASC
+            ORDER BY MIN(created_at) ASC, emoji ASC
             """,
             (announcement_id,),
         ).fetchall()
