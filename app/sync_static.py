@@ -1493,6 +1493,9 @@ def sync_static(
                 for city in effective_cities
             },
             force=force,
+            # Hash exactly here -- this is the authoritative path -- but record
+            # fingerprints so the next server start does not repeat the work.
+            app_db_path=settings.app_db_path,
         )
         LOGGER.info("built download db at %s", settings.download_db_path)
     finally:

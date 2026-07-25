@@ -353,6 +353,19 @@ CREATE INDEX IF NOT EXISTS idx_account_sync_documents_account
     ON account_sync_documents(account_id);
 CREATE INDEX IF NOT EXISTS idx_account_sync_documents_updated_at
     ON account_sync_documents(updated_at DESC);
+
+-- Change-detection stamps for refresh_database_versions. Lives here rather than
+-- in the static database because the weekly sync replaces that file wholesale.
+CREATE TABLE IF NOT EXISTS database_version_fingerprints (
+    name          TEXT PRIMARY KEY,
+    db_path       TEXT NOT NULL,
+    file_size     INTEGER NOT NULL,
+    file_mtime_ns INTEGER NOT NULL,
+    file_inode    INTEGER NOT NULL DEFAULT 0,
+    shape_digest  TEXT NOT NULL DEFAULT '',
+    content_hash  TEXT NOT NULL,
+    checked_at    INTEGER NOT NULL
+);
 """
 
 DOWNLOAD_SCHEMA_SQL = """
@@ -415,6 +428,33 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 @contextmanager
 def get_connection(db_path: str | Path) -> Iterator[sqlite3.Connection]:
     connection = connect(db_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def connect_readonly(db_path: str | Path) -> sqlite3.Connection:
+    """Open a database without writing to it.
+
+    Deliberately skips the ``PRAGMA journal_mode = WAL`` that
+    ``_configure_connection`` applies: on a database that is not already in WAL
+    mode that pragma rewrites the file header, so merely measuring a file would
+    change the size/mtime that change detection records for it.
+    """
+    uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 5000;")
+    return connection
+
+
+@contextmanager
+def get_readonly_connection(db_path: str | Path) -> Iterator[sqlite3.Connection]:
+    try:
+        connection = connect_readonly(db_path)
+    except sqlite3.OperationalError:
+        connection = connect(db_path)
     try:
         yield connection
     finally:
@@ -906,6 +946,12 @@ def _iter_table_rows_as_bytes(
     connection: sqlite3.Connection,
     table_name: str,
 ) -> Iterable[bytes]:
+    """Reference serialization for :func:`hash_tables`, row by row.
+
+    ``hash_tables`` reads in batches instead, which is faster but must stay
+    byte-for-byte identical to this; ``test_database_versions.py`` asserts that
+    equivalence against this function.
+    """
     columns_info = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
     column_names = [row["name"] for row in columns_info]
     if not column_names:
@@ -921,15 +967,199 @@ def _iter_table_rows_as_bytes(
         yield repr(values).encode("utf-8")
 
 
+_HASH_FETCH_BATCH_SIZE = 50_000
+
+
+def _hash_table_rows(hasher, connection: sqlite3.Connection, table_name: str) -> None:
+    """Fold every row of ``table_name`` into ``hasher``.
+
+    Equivalent to hashing :func:`_iter_table_rows_as_bytes` row by row -- with
+    ``row_factory`` unset, ``repr()`` of the row tuple is exactly what that
+    helper yields -- but fetching in batches makes it ~1.4x faster on the
+    multi-million-row tables.
+
+    Do not change this serialization or the ORDER BY. Both feed every stored
+    content_hash, so any change bumps all database versions at once and forces
+    every client to re-download the databases.
+    """
+    previous_factory = connection.row_factory
+    try:
+        connection.row_factory = sqlite3.Row
+        columns_info = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+        column_names = [row["name"] for row in columns_info]
+        if not column_names:
+            return
+
+        columns_sql = ", ".join(f'"{name}"' for name in column_names)
+        order_sql = ", ".join(f'"{name}"' for name in column_names)
+        connection.row_factory = None
+        cursor = connection.execute(
+            f'SELECT {columns_sql} FROM "{table_name}" ORDER BY {order_sql}'
+        )
+        while True:
+            rows = cursor.fetchmany(_HASH_FETCH_BATCH_SIZE)
+            if not rows:
+                break
+            hasher.update(b"".join(repr(row).encode("utf-8") + b"\n" for row in rows))
+    finally:
+        connection.row_factory = previous_factory
+
+
 def hash_tables(db_path: str | Path, table_names: tuple[str, ...]) -> str:
     hasher = hashlib.sha256()
-    with get_connection(db_path) as connection:
+    with get_readonly_connection(db_path) as connection:
         for table_name in table_names:
             hasher.update(f"table:{table_name}\n".encode("utf-8"))
-            for row_bytes in _iter_table_rows_as_bytes(connection, table_name):
-                hasher.update(row_bytes)
-                hasher.update(b"\n")
+            _hash_table_rows(hasher, connection, table_name)
     return hasher.hexdigest()
+
+
+# Tables whose contents define each published database version. Order is part of
+# the hash input and must not change (see _hash_table_rows).
+MAIN_VERSION_TABLES = (
+    "routes",
+    "paths",
+    "stops",
+    "path_points",
+    "operators",
+    "route_operators",
+    "route_schedules",
+)
+DOWNLOAD_VERSION_TABLES = ("routes", "paths")
+CITY_VERSION_TABLES = ("stops",)
+
+# Tables large enough that summing text lengths costs more than it is worth.
+# path_points holds coordinates, so its numeric totals already capture changes.
+_SHAPE_DIGEST_NUMERIC_ONLY_TABLES = frozenset({"path_points"})
+
+
+def _shape_digest(db_path: str | Path, table_names: tuple[str, ...]) -> str:
+    """Summarize the hashed tables cheaply, ignoring everything else in the file.
+
+    Aggregates row counts, numeric totals and text-length totals into one digest.
+    Runtime writes to non-hashed tables (tdx_fetch_state, stop_travel_times) move
+    the file's mtime but cannot move these numbers, which is what lets a boot
+    after serving traffic skip the full hash.
+
+    This is a fingerprint, not a proof: a change preserving every count and total
+    would pass. It is only ever consulted for the main database, only after the
+    file-identity check fails, and never by sync_static.
+    """
+    hasher = hashlib.sha256()
+    with get_readonly_connection(db_path) as connection:
+        for table_name in table_names:
+            columns_info = connection.execute(
+                f'PRAGMA table_info("{table_name}")'
+            ).fetchall()
+            column_names = [row["name"] for row in columns_info]
+            if not column_names:
+                hasher.update(f"table:{table_name}:absent\n".encode("utf-8"))
+                continue
+
+            selects = ["COUNT(*)"]
+            include_text_lengths = table_name not in _SHAPE_DIGEST_NUMERIC_ONLY_TABLES
+            for name in column_names:
+                selects.append(f'TOTAL(CAST("{name}" AS REAL))')
+                if include_text_lengths:
+                    selects.append(f'TOTAL(LENGTH(CAST("{name}" AS TEXT)))')
+            row = connection.execute(
+                f'SELECT {", ".join(selects)} FROM "{table_name}"'
+            ).fetchone()
+            hasher.update(f"table:{table_name}:{tuple(row)!r}\n".encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def _stat_fingerprint(db_path: Path) -> tuple[int, int, int] | None:
+    """Return ``(size, mtime_ns, inode)`` for a database file, or None if absent."""
+    try:
+        stat_result = db_path.stat()
+    except OSError:
+        return None
+    return (
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        getattr(stat_result, "st_ino", 0) or 0,
+    )
+
+
+def _load_version_fingerprints(app_db_path: str | Path) -> dict[str, sqlite3.Row]:
+    try:
+        with get_readonly_connection(app_db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT name, db_path, file_size, file_mtime_ns, file_inode,
+                       shape_digest, content_hash
+                FROM database_version_fingerprints
+                """
+            ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {row["name"]: row for row in rows}
+
+
+def _store_version_fingerprint(
+    connection: sqlite3.Connection,
+    name: str,
+    db_path: Path,
+    stat_fingerprint: tuple[int, int, int] | None,
+    shape_digest: str,
+    content_hash: str,
+    now: int,
+) -> None:
+    if stat_fingerprint is None:
+        return
+    file_size, file_mtime_ns, file_inode = stat_fingerprint
+    connection.execute(
+        """
+        INSERT INTO database_version_fingerprints
+            (name, db_path, file_size, file_mtime_ns, file_inode,
+             shape_digest, content_hash, checked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            db_path = excluded.db_path,
+            file_size = excluded.file_size,
+            file_mtime_ns = excluded.file_mtime_ns,
+            file_inode = excluded.file_inode,
+            shape_digest = excluded.shape_digest,
+            content_hash = excluded.content_hash,
+            checked_at = excluded.checked_at
+        """,
+        (
+            name,
+            str(db_path),
+            file_size,
+            file_mtime_ns,
+            file_inode,
+            shape_digest,
+            content_hash,
+            now,
+        ),
+    )
+
+
+def _fingerprint_matches_file(
+    row: sqlite3.Row | None,
+    db_path: Path,
+    stat_fingerprint: tuple[int, int, int] | None,
+) -> bool:
+    """True when the file is byte-for-byte the one the fingerprint was taken from."""
+    if row is None or stat_fingerprint is None:
+        return False
+    return (
+        row["db_path"] == str(db_path)
+        and row["file_size"] == stat_fingerprint[0]
+        and row["file_mtime_ns"] == stat_fingerprint[1]
+        and row["file_inode"] == stat_fingerprint[2]
+    )
+
+
+def _load_versioned_names(main_db_path: str | Path) -> set[str]:
+    try:
+        with get_readonly_connection(main_db_path) as connection:
+            rows = connection.execute("SELECT name FROM database_versions").fetchall()
+    except sqlite3.Error:
+        return set()
+    return {row["name"] for row in rows}
 
 
 def _upsert_database_version(
@@ -977,48 +1207,84 @@ def _upsert_database_version(
     return {"name": name, "version": next_version, "updated_at": now, "changed": True}
 
 
+def _build_version_entries(
+    main_db_path: str | Path,
+    download_db_path: str | Path,
+    city_db_paths: dict[str, Path] | None,
+) -> list[tuple[str, Path, tuple[str, ...]]]:
+    entries: list[tuple[str, Path, tuple[str, ...]]] = [
+        ("main", Path(main_db_path), MAIN_VERSION_TABLES),
+        ("download", Path(download_db_path), DOWNLOAD_VERSION_TABLES),
+    ]
+    for city_name, city_path in sorted((city_db_paths or {}).items()):
+        entries.append((city_name, Path(city_path), CITY_VERSION_TABLES))
+    return entries
+
+
 def refresh_database_versions(
     main_db_path: str | Path,
     *,
     download_db_path: str | Path,
     city_db_paths: dict[str, Path] | None = None,
     force: bool = False,
+    app_db_path: str | Path | None = None,
+    trust_fingerprints: bool = False,
 ) -> list[dict[str, int | str | bool]]:
-    city_db_paths = city_db_paths or {}
+    """Recompute each database's content hash and bump its version when it changed.
 
-    entries: list[tuple[str, Path, tuple[str, ...]]] = [
-        (
-            "main",
-            Path(main_db_path),
-            (
-                "routes",
-                "paths",
-                "stops",
-                "path_points",
-                "operators",
-                "route_operators",
-                "route_schedules",
-            ),
-        ),
-        (
-            "download",
-            Path(download_db_path),
-            (
-                "routes",
-                "paths",
-            ),
-        ),
-    ]
-    for city_name, city_path in sorted(city_db_paths.items()):
-        entries.append((city_name, Path(city_path), ("stops",)))
+    Hashing every row of the static databases takes about ten seconds, and on a
+    normal restart it produces the hash already stored -- static data only changes
+    via sync_static, which refreshes versions itself. The optional arguments let a
+    caller skip that work:
+
+    ``app_db_path`` -- where to persist change-detection fingerprints. Passing it
+    alone changes nothing observable.
+
+    ``trust_fingerprints`` -- consult those fingerprints and skip hashing any
+    database that has not changed. sync_static deliberately leaves this False so
+    the authoritative post-sync hash is always exact, while still refreshing the
+    stamps so the next boot is fast.
+    """
+    entries = _build_version_entries(main_db_path, download_db_path, city_db_paths)
+
+    use_gate = app_db_path is not None and trust_fingerprints and not force
+    stored: dict[str, sqlite3.Row] = {}
+    versioned_names: set[str] = set()
+    if use_gate:
+        stored = _load_version_fingerprints(app_db_path)
+        versioned_names = _load_versioned_names(main_db_path)
 
     hashes: dict[str, str] = {}
+    shape_digests: dict[str, str] = {}
+    skipped: set[str] = set()
+
     for name, db_path, tables in entries:
         if not db_path.exists():
             continue
+
+        row = stored.get(name) if use_gate else None
+        gate_open = row is not None and name in versioned_names
+        if gate_open:
+            stat_fingerprint = _stat_fingerprint(db_path)
+            if _fingerprint_matches_file(row, db_path, stat_fingerprint):
+                skipped.add(name)
+                continue
+
+            # The file moved but that may only be a write to a non-hashed table.
+            if name == "main" and row["shape_digest"]:
+                digest = _shape_digest(db_path, tables)
+                shape_digests[name] = digest
+                if digest == row["shape_digest"]:
+                    skipped.add(name)
+                    continue
+
         hashes[name] = hash_tables(db_path, tables)
+        if name == "main" and name not in shape_digests:
+            shape_digests[name] = _shape_digest(db_path, tables)
 
     if not hashes:
+        if app_db_path is not None and skipped:
+            _restamp_fingerprints(app_db_path, entries, skipped, stored, shape_digests)
         return []
 
     now = int(time.time())
@@ -1028,7 +1294,113 @@ def refresh_database_versions(
             for name, content_hash in hashes.items()
         ]
         connection.commit()
+
+    # The upsert above just wrote to the main database, changing its own size and
+    # mtime. Stat only now: the connection has been closed, so WAL contents have
+    # been checkpointed into the file. Stamping any earlier records a value the
+    # checkpoint immediately invalidates, and every later boot would rehash.
+    if app_db_path is not None:
+        with get_connection(app_db_path) as app_connection:
+            for name, db_path, _tables in entries:
+                if name in hashes:
+                    content_hash = hashes[name]
+                elif name in skipped:
+                    content_hash = stored[name]["content_hash"]
+                else:
+                    continue
+                _store_version_fingerprint(
+                    app_connection,
+                    name,
+                    db_path,
+                    _stat_fingerprint(db_path),
+                    _resolve_shape_digest(name, shape_digests, stored),
+                    content_hash,
+                    now,
+                )
+            app_connection.commit()
+
     return results
+
+
+def _resolve_shape_digest(
+    name: str,
+    shape_digests: dict[str, str],
+    stored: dict[str, sqlite3.Row],
+) -> str:
+    """Keep the previously stored digest when this run had no reason to compute one.
+
+    A database skipped on file identity alone never needs its shape digest, but
+    overwriting it with an empty string would disable that fallback for every
+    later run.
+    """
+    digest = shape_digests.get(name)
+    if digest is not None:
+        return digest
+    row = stored.get(name)
+    return "" if row is None else row["shape_digest"]
+
+
+def _restamp_fingerprints(
+    app_db_path: str | Path,
+    entries: list[tuple[str, Path, tuple[str, ...]]],
+    skipped: set[str],
+    stored: dict[str, sqlite3.Row],
+    shape_digests: dict[str, str],
+) -> None:
+    """Re-stamp databases that were skipped, so the next boot skips them sooner.
+
+    Without this, a database that only passed the shape-digest check would repeat
+    that scan on every boot forever.
+    """
+    now = int(time.time())
+    with get_connection(app_db_path) as connection:
+        for name, db_path, _tables in entries:
+            if name not in skipped:
+                continue
+            row = stored.get(name)
+            if row is None:
+                continue
+            _store_version_fingerprint(
+                connection,
+                name,
+                db_path,
+                _stat_fingerprint(db_path),
+                shape_digests.get(name, row["shape_digest"]),
+                row["content_hash"],
+                now,
+            )
+        connection.commit()
+
+
+def main_db_unchanged(main_db_path: str | Path, app_db_path: str | Path) -> bool:
+    """True when the static database matches the fingerprint last recorded for it."""
+    main_path = Path(main_db_path)
+    if not main_path.exists():
+        return False
+    row = _load_version_fingerprints(app_db_path).get("main")
+    if row is None or "main" not in _load_versioned_names(main_db_path):
+        return False
+    if _fingerprint_matches_file(row, main_path, _stat_fingerprint(main_path)):
+        return True
+    if not row["shape_digest"]:
+        return False
+    return _shape_digest(main_path, MAIN_VERSION_TABLES) == row["shape_digest"]
+
+
+def export_download_db_if_stale(
+    main_db_path: str | Path,
+    target_db_path: str | Path,
+    app_db_path: str | Path,
+) -> bool:
+    """Rebuild the download database unless the static database is unchanged.
+
+    Returns True when an export ran. Skipping also keeps the download database's
+    own mtime stable, so its fingerprint keeps matching too.
+    """
+    if Path(target_db_path).exists() and main_db_unchanged(main_db_path, app_db_path):
+        return False
+    export_download_db(main_db_path, target_db_path)
+    return True
 
 
 def load_database_version(connection: sqlite3.Connection, name: str) -> dict | None:
