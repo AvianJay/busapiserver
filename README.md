@@ -127,6 +127,32 @@ python -m app.sync_realtime --routeid TPE307
 
 `routeid` 為 TDX 的 `SubRouteUID`（例如 `TPE307`）。
 
+#### 去返程合併
+
+部分業者（公路客運／THB 與多數縣市）會把同一條路線的每個方向各給一個
+`SubRouteUID`，例如 `THB181501`（去程）與 `THB181502`（返程），同屬
+`RouteUID` = `THB1815`。這會讓同一條路線在搜尋結果出現兩筆。
+
+`sync_static` 會依 `(RouteUID, SubRouteName)` 把方向兄弟合併成一條路線、兩個
+`pathid`，與六都本來的資料形狀一致。`pathid` 維持等於 TDX 的 `Direction`。
+
+- 存活下來的 `routeid` 是方向最小的成員（通常就是去程），另一個成為別名。
+- 別名記錄在 `route_subroutes` 表（`subroute_uid` → `routeid`），單獨成組的路線
+  也會有一筆 identity 列。
+- 路線詳情類 API 收到別名 `routeid` 時會自動導向存活的路線，並在回應中回傳
+  正規 `routeid`，同時附上 `X-Route-Alias-Resolved` 標頭。
+- 即時到站會用 `route_subroutes` 展開查詢，確保兩個方向都拿得到資料。
+- 字母變體（`1815A`~`1815G`）與環狀線不會被合併；台南把方向寫進 `SubRouteName`，
+  因此依資料自然不會被合併。
+- 可用 `STATIC_MERGE_DIRECTIONS=false` 關閉合併（產出與合併前位元相同的列）。
+
+合併後若要修正既有雲端收藏中已被吸收的 `routeid`：
+
+```bash
+python -m app.migrate_favorite_routeids --dry-run
+python -m app.migrate_favorite_routeids
+```
+
 ### 啟動伺服器
 
 ```bash
@@ -151,6 +177,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `TDX_RETRY_ATTEMPTS` | `429`／`5xx` 最大重試次數 | `6` |
 | `TDX_RETRY_BACKOFF` | 重試的基礎退避秒數 | `2.0` |
 | `TDX_MIN_REQUEST_INTERVAL` | 每次 TDX 請求間的最小間隔秒數 | `0.5` |
+| `STATIC_MERGE_DIRECTIONS` | 是否把每方向各一個 `SubRouteUID` 的路線合併成單一路線 | `true` |
 
 ### 資料庫與快取
 

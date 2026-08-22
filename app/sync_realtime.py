@@ -24,6 +24,7 @@ from app.db import (
 )
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.ntpc_opendata import NtpcOpenDataClient
+from app.route_aliases import get_route_alias_index
 from app.tdx_auth import TDXTokenManager
 from app.tdx_client import TDXClient, TDXJSONResponse
 
@@ -88,15 +89,24 @@ class BusesCacheEntry:
     expires_at: float
 
 
-def _tdx_routeid_to_local(city: str, routeid: Any) -> str | None:
+def _tdx_routeid_to_local(city: str, routeid: Any, *, settings: Settings | None = None) -> str | None:
+    """Map a SubRouteUID from a TDX response onto the local canonical routeid.
+
+    A merged route is queried by every SubRouteUID it absorbed, so responses
+    arrive tagged with the original per-direction ids and have to be collapsed
+    back before they can be bucketed. ``_build_snapshot`` then files each item
+    by its ``Direction``, which the merge preserves as the pathid.
+    """
     if routeid is None:
         return None
     normalized = str(routeid).strip()
     if not normalized:
         return None
     if city == INTERCITY_CITY_NAME:
-        return to_intercity_routeid(normalized)
-    return normalized
+        normalized = to_intercity_routeid(normalized)
+    if settings is None:
+        return normalized
+    return get_route_alias_index(settings).canonical(normalized)
 
 
 def _to_unix_seconds(value: str | None) -> int | None:
@@ -1009,6 +1019,9 @@ class RealtimeService:
         self._city_refresh_locks_guard = threading.Lock()
 
     def get_snapshot(self, routeid: str, *, force_refresh: bool = False) -> dict[str, Any]:
+        # A routeid absorbed by a direction merge still has to resolve, or every
+        # favorite and widget pointing at the return direction goes dark.
+        routeid = get_route_alias_index(self.settings).canonical(routeid)
         static_route = self._load_static_route(routeid)
         if static_route is None:
             raise RouteNotFoundError(routeid)
@@ -1063,8 +1076,19 @@ class RealtimeService:
 
         Returns a mapping of routeid -> snapshot for every route that was
         successfully resolved.  Unknown route IDs are silently omitted.
+
+        Stale routeids that a merge absorbed resolve to the surviving route, and
+        the snapshot is echoed back under both keys so widgets that still hold
+        the old id keep rendering.
         """
-        deduped_routeids = sorted(set(routeids))
+        alias_index = get_route_alias_index(self.settings)
+        aliases_by_canonical: dict[str, list[str]] = {}
+        for routeid in routeids:
+            canonical = alias_index.canonical(routeid)
+            if canonical != routeid:
+                aliases_by_canonical.setdefault(canonical, []).append(routeid)
+
+        deduped_routeids = sorted({alias_index.canonical(routeid) for routeid in routeids})
         if not deduped_routeids:
             return {}
 
@@ -1134,6 +1158,13 @@ class RealtimeService:
                     "batch single-route fallback failed routeid=%s",
                     routeid,
                 )
+
+        for canonical, aliases in aliases_by_canonical.items():
+            snapshot = results.get(canonical)
+            if snapshot is None:
+                continue
+            for alias in aliases:
+                results.setdefault(alias, snapshot)
 
         return results
 
@@ -1252,6 +1283,7 @@ class RealtimeService:
             routeid = _tdx_routeid_to_local(
                 city,
                 item.get("SubRouteUID") or item.get("RouteUID"),
+                settings=self.settings,
             )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
@@ -1261,6 +1293,7 @@ class RealtimeService:
             routeid = _tdx_routeid_to_local(
                 city,
                 item.get("SubRouteUID") or item.get("RouteUID"),
+                settings=self.settings,
             )
             if routeid in static_routes:
                 buses_by_route[routeid].append(item)
@@ -1344,6 +1377,7 @@ class RealtimeService:
             routeid = _tdx_routeid_to_local(
                 city,
                 item.get("SubRouteUID") or item.get("RouteUID"),
+                settings=self.settings,
             )
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
@@ -1353,6 +1387,7 @@ class RealtimeService:
             routeid = _tdx_routeid_to_local(
                 city,
                 item.get("SubRouteUID") or item.get("RouteUID"),
+                settings=self.settings,
             )
             if routeid in static_routes:
                 buses_by_route[routeid].append(item)
@@ -1735,6 +1770,7 @@ class RouteBusesService:
         self._city_refresh_locks_guard = threading.Lock()
 
     def get_buses(self, routeid: str, *, force_refresh: bool = False) -> list[dict[str, Any]]:
+        routeid = get_route_alias_index(self.settings).canonical(routeid)
         if not self._route_exists(routeid):
             raise RouteNotFoundError(routeid)
 
@@ -1836,6 +1872,7 @@ class RouteBusesService:
             routeid = _tdx_routeid_to_local(
                 city,
                 item.get("SubRouteUID") or item.get("RouteUID"),
+                settings=self.settings,
             )
             if routeid in stale_buses:
                 items_by_route[routeid].append(item)
