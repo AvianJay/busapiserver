@@ -697,9 +697,30 @@
       badge.setAttribute("label", `${providerLabel(state.session.provider)} / ${state.session.displayName || "已登入"}`);
     }
 
+    // md-dialog is a custom element defined by the @material/web module, which
+    // loads from a CDN and therefore may not have upgraded yet when render()
+    // first runs. Calling show()/close() on the un-upgraded element throws, and
+    // because renderNotice() runs first, that aborts the whole render and
+    // leaves the page blank until something calls render() again. Defer the
+    // call instead of letting it take the page down.
+    function setMergeDialogOpen(open) {
+      const dialog = document.getElementById("mergeDialog");
+      if (!dialog) return;
+
+      if (typeof dialog.show !== "function" || typeof dialog.close !== "function") {
+        customElements.whenDefined("md-dialog").then(() => setMergeDialogOpen(open));
+        return;
+      }
+
+      if (open) {
+        dialog.show();
+      } else {
+        dialog.close();
+      }
+    }
+
     function renderNotice() {
       const banner = document.getElementById("noticeBanner");
-      const mergeDialog = document.getElementById("mergeDialog");
 
       if (state.mergePreview) {
         const dialogContent = document.getElementById("mergeDialogContent");
@@ -712,10 +733,10 @@
             該來源帳號目前有 ${escapeHtml(String((state.mergePreview.source_identities || []).length))} 個登入身份，且有 ${escapeHtml(String(state.mergePreview.active_device_count || 0))} 台登入中的裝置。
           </p>
         `;
-        mergeDialog.show();
+        setMergeDialogOpen(true);
         return;
       } else {
-        mergeDialog.close();
+        setMergeDialogOpen(false);
       }
 
       if (!state.notice) {
@@ -875,11 +896,11 @@
 
     // Dialog action listeners
     document.getElementById("confirmMergeButton").addEventListener("click", async () => {
-      document.getElementById("mergeDialog").close();
+      setMergeDialogOpen(false);
       await confirmMerge();
     });
     document.getElementById("cancelMergeButton").addEventListener("click", () => {
-      document.getElementById("mergeDialog").close();
+      setMergeDialogOpen(false);
       clearNotice();
     });
 
