@@ -36,6 +36,7 @@ from app.db import (
 from app.logging_utils import get_logger, setup_logging, shutdown_logging
 from app.ntpc_opendata import NtpcOpenDataClient
 from app.request_analytics import record_request_analytics, should_record_analytics
+from app.static_sync_control import StaticSyncCoordinator
 from app.sync_realtime import RealtimeService, RouteBusesService
 from app.sync_static import sync_static
 from app.tdx_auth import TDXTokenManager
@@ -43,6 +44,9 @@ from app.tdx_client import TDXClient
 
 LOGGER = get_logger("main")
 CORS_ALLOW_METHODS = ("GET", "POST", "PATCH", "PUT")
+# How often the scheduler thread surfaces to check for shutdown or a queued
+# manual sync. Short enough that stopping the server is not perceptibly delayed.
+_SCHEDULER_TICK_SECONDS = 1.0
 
 
 def _next_monday_4am(now: datetime) -> datetime:
@@ -87,6 +91,7 @@ def _reconcile_database_versions(settings) -> None:
 
 def _run_weekly_static_sync(app: FastAPI, stop_event: threading.Event) -> None:
     settings = app.state.settings
+    coordinator: StaticSyncCoordinator = app.state.static_sync_coordinator
 
     try:
         _reconcile_database_versions(settings)
@@ -98,20 +103,36 @@ def _run_weekly_static_sync(app: FastAPI, stop_event: threading.Event) -> None:
         target = _next_monday_4am(now)
         wait_seconds = max(0.0, (target - now).total_seconds())
 
-        # Wait in chunks so shutdown can interrupt promptly.
-        while wait_seconds > 0 and not stop_event.is_set():
-            sleep_seconds = min(60.0, wait_seconds)
-            stop_event.wait(timeout=sleep_seconds)
-            wait_seconds -= sleep_seconds
+        # Wait in short ticks on the trigger event so that both an admin-queued
+        # run and a shutdown are noticed within a second. Servicing manual runs
+        # on this thread is what keeps two syncs from racing over bus.db.tmp.
+        deadline = time.monotonic() + wait_seconds
+        triggered = False
+        while not stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if coordinator.wait_for_trigger(timeout=min(_SCHEDULER_TICK_SECONDS, remaining)):
+                triggered = True
+                break
 
         if stop_event.is_set():
             break
 
+        if triggered:
+            coordinator.run_claimed(
+                lambda *, cities, force: sync_static(settings, cities=cities, force=force)
+            )
+            continue
+
         try:
             LOGGER.info("weekly static sync started")
+            coordinator.begin_scheduled()
             sync_static(settings)
+            coordinator.finish()
             LOGGER.info("weekly static sync completed")
         except Exception as exc:
+            coordinator.finish(exc)
             LOGGER.exception("weekly static sync failed: %s", exc)
             # Avoid tight error loop.
             if not stop_event.wait(timeout=60):
@@ -196,6 +217,7 @@ async def lifespan(app: FastAPI):
         ntpc_opendata_client=ntpc_opendata_client,
     )
     scheduler_stop_event = threading.Event()
+    static_sync_coordinator = StaticSyncCoordinator()
     scheduler_thread = threading.Thread(
         target=_run_weekly_static_sync,
         args=(app, scheduler_stop_event),
@@ -204,6 +226,7 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.settings = settings
+    app.state.static_sync_coordinator = static_sync_coordinator
     app.state.log_dir = log_dir
     app.state.token_manager = token_manager
     app.state.tdx_client = tdx_client

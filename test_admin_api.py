@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.responses import RedirectResponse
+from pydantic import ValidationError
 
 from app.api import admin as admin_api
 from app.api import analytics as analytics_api
@@ -15,6 +16,7 @@ from app.auth_service import AuthPrincipal, OAuthIdentity, _upsert_login, authen
 from app.config import Settings
 from app.db import get_connection, init_app_db, init_db
 from app.main import app
+from app.static_sync_control import StaticSyncCoordinator
 
 
 def _settings(db_path: Path) -> Settings:
@@ -47,8 +49,8 @@ def _settings(db_path: Path) -> Settings:
 
 
 class _FakeRequest:
-    def __init__(self, settings: Settings) -> None:
-        self.app = SimpleNamespace(state=SimpleNamespace(settings=settings))
+    def __init__(self, settings: Settings, **state) -> None:
+        self.app = SimpleNamespace(state=SimpleNamespace(settings=settings, **state))
         self.headers = {"user-agent": "YABus/1.3.1-abc123 (windows)"}
         self.state = SimpleNamespace()
 
@@ -95,6 +97,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("/admin/user_manage", paths)
         self.assertIn("/api/v1/admin/analytics", paths)
         self.assertIn("/api/v1/admin/users", paths)
+        self.assertIn("/api/v1/admin/static-sync", paths)
 
     def test_admin_pages_require_login_or_admin_role(self) -> None:
         request = self._request()
@@ -164,6 +167,100 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(revoked["ok"])
         self.assertEqual(revoked["revoked_sessions"], 1)
         self.assertIsNone(authenticate_token(self.settings, member_login.token))
+
+
+class AdminStaticSyncApiTests(unittest.TestCase):
+    """The only way to sync on a deployment with no shell access."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "bus.db"
+        init_db(self.db_path)
+        init_app_db(self.db_path.parent / "app.db")
+        self.settings = _settings(self.db_path)
+        self.coordinator = StaticSyncCoordinator()
+        self._original = admin_api.get_request_principal
+
+    def tearDown(self) -> None:
+        admin_api.get_request_principal = self._original
+        self.temp_dir.cleanup()
+
+    def _request(self, *, with_coordinator: bool = True) -> _FakeRequest:
+        if with_coordinator:
+            return _FakeRequest(self.settings, static_sync_coordinator=self.coordinator)
+        return _FakeRequest(self.settings)
+
+    def _set_principal(self, role: str | None) -> None:
+        if role is None:
+            admin_api.get_request_principal = lambda request: None
+            return
+        principal = AuthPrincipal(account_id=1, device_id=2, token_id=3, role=role)
+        admin_api.get_request_principal = lambda request: principal
+
+    def test_requires_authentication(self) -> None:
+        self._set_principal(None)
+        with self.assertRaises(HTTPException) as ctx:
+            admin_api.trigger_static_sync(self._request(), None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_requires_admin_role(self) -> None:
+        self._set_principal("user")
+        with self.assertRaises(HTTPException) as ctx:
+            admin_api.trigger_static_sync(self._request(), None)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+        with self.assertRaises(HTTPException) as status_ctx:
+            admin_api.get_static_sync_status(self._request())
+        self.assertEqual(status_ctx.exception.status_code, 403)
+
+    def test_admin_can_queue_a_sync(self) -> None:
+        self._set_principal("admin")
+
+        result = admin_api.trigger_static_sync(self._request(), None)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"]["state"], "queued")
+        self.assertIsNone(result["status"]["cities"])
+        self.assertTrue(self.coordinator.wait_for_trigger(timeout=0))
+
+    def test_admin_can_scope_the_sync_to_cities(self) -> None:
+        self._set_principal("admin")
+
+        result = admin_api.trigger_static_sync(
+            self._request(),
+            admin_api.StaticSyncRequest(cities=["Hsinchu"]),
+        )
+
+        self.assertEqual(result["status"]["cities"], ["Hsinchu"])
+
+    def test_unknown_city_is_rejected_rather_than_silently_ignored(self) -> None:
+        with self.assertRaises(ValidationError):
+            admin_api.StaticSyncRequest(cities=["Atlantis"])
+
+    def test_second_trigger_conflicts_while_one_is_in_flight(self) -> None:
+        self._set_principal("admin")
+        admin_api.trigger_static_sync(self._request(), None)
+
+        with self.assertRaises(HTTPException) as ctx:
+            admin_api.trigger_static_sync(self._request(), None)
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_status_reports_the_outcome(self) -> None:
+        self._set_principal("admin")
+        admin_api.trigger_static_sync(self._request(), None)
+        self.coordinator.run_claimed(lambda *, cities, force: None)
+
+        status = admin_api.get_static_sync_status(self._request())
+
+        self.assertEqual(status["state"], "idle")
+        self.assertIsNone(status["last_error"])
+        self.assertIsNotNone(status["finished_at"])
+
+    def test_missing_scheduler_reports_unavailable(self) -> None:
+        self._set_principal("admin")
+        with self.assertRaises(HTTPException) as ctx:
+            admin_api.trigger_static_sync(self._request(with_coordinator=False), None)
+        self.assertEqual(ctx.exception.status_code, 503)
 
 
 if __name__ == "__main__":

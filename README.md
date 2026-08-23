@@ -127,6 +127,45 @@ python -m app.sync_realtime --routeid TPE307
 
 `routeid` 為 TDX 的 `SubRouteUID`（例如 `TPE307`）。
 
+#### 用 admin API 手動觸發同步
+
+排程固定在每週一 04:00。若部署環境沒有 shell（只能啟動／關閉服務），可以用 admin
+端點觸發 —— **重新啟動伺服器本身不會觸發同步**，開機只會重建 download db 與版本號。
+
+```bash
+# 全量同步
+curl -X POST https://bus.avianjay.sbs/api/v1/admin/static-sync \
+  -H "Authorization: Bearer <admin token>"
+
+# 只同步特定縣市（公路客運一律會跟著跑）
+curl -X POST https://bus.avianjay.sbs/api/v1/admin/static-sync \
+  -H "Authorization: Bearer <admin token>" \
+  -H "Content-Type: application/json" \
+  -d '{"cities": ["Hsinchu"]}'
+
+# 查詢進度
+curl https://bus.avianjay.sbs/api/v1/admin/static-sync \
+  -H "Authorization: Bearer <admin token>"
+```
+
+也接受登入用的 `yabus_auth_token` cookie，所以用 admin 帳號登入網站後，直接在瀏覽器
+主控台執行即可：
+
+```js
+await (await fetch('/api/v1/admin/static-sync', {method: 'POST'})).json()
+await (await fetch('/api/v1/admin/static-sync')).json()   // 查進度
+```
+
+行為說明：
+
+- 立刻回傳 `202`，實際工作交給既有的排程執行緒 —— 手動同步與週一 04:00 的排程**不可能
+  同時跑**（`sync_static` 會換掉 `bus.db.tmp`，並行會互相破壞）。
+- 已經在排隊或執行中時再次觸發會得到 `409`。
+- 狀態端點回傳 `state`（`idle` / `queued` / `running`）、`started_at`、`finished_at`、
+  `duration_seconds`、`last_error`。
+- `cities` 只接受 TDX 正式縣市名稱，打錯會回 `422` 而不是安靜地變成 no-op。
+- `force` 會強制所有資料庫跳版本（含沒變動的），一般不要用。
+
 #### 去返程合併
 
 部分業者（公路客運／THB 與多數縣市）會把同一條路線的每個方向各給一個
