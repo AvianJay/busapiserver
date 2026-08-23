@@ -92,6 +92,20 @@ def load_dotenv(dotenv_path: str | Path) -> None:
         os.environ[key] = value
 
 
+def _env_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return default
+    if cleaned in {"1", "true", "yes", "on"}:
+        return True
+    if cleaned in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _split_csv(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
     if not value:
         return default
@@ -156,6 +170,12 @@ class Settings:
     # sync). Independent of the static route database so the weekly static sync
     # never touches it. When not provided, it defaults to "app.db" next to db_path.
     app_db_path: Path | None = None
+    # Some authorities (公路客運/THB and most counties) give each direction of a
+    # route its own SubRouteUID, which used to surface as two separate routes.
+    # When enabled, sync_static merges direction siblings into one route with
+    # two paths. Turning this off reproduces the pre-merge rows byte for byte,
+    # so a rollback is one env change plus a re-sync.
+    static_merge_directions: bool = True
 
     def __post_init__(self) -> None:
         if self.app_db_path is None:
@@ -251,6 +271,9 @@ class Settings:
             ),
             account_sync_max_group_name_length=int(
                 os.getenv("ACCOUNT_SYNC_MAX_GROUP_NAME_LENGTH", "120")
+            ),
+            static_merge_directions=_env_bool(
+                os.getenv("STATIC_MERGE_DIRECTIONS"), True
             ),
             account_sync_max_json_depth=int(
                 os.getenv("ACCOUNT_SYNC_MAX_JSON_DEPTH", "16")

@@ -14,6 +14,7 @@ from app.config import (
     INTERCITY_CITY_NAME,
     INTERCITY_PREFIX,
     Settings,
+    from_intercity_routeid,
     get_settings,
     to_intercity_routeid,
 )
@@ -22,8 +23,10 @@ from app.db import (
     delete_main_routes_by_prefix,
     export_download_db,
     get_connection,
+    has_route_subroutes_table,
     init_city_db,
     init_db,
+    load_route_subroute_map,
     load_tdx_fetch_state,
     refresh_database_versions,
     save_tdx_fetch_state,
@@ -68,6 +71,10 @@ class StaticRoute:
     destination_en: str | None = None
     operator_names: list[str] = field(default_factory=list)
     paths: dict[int, StaticPath] = field(default_factory=dict)
+    # Every SubRouteUID this route was built from, mapped to its Direction.
+    # Usually just the routeid itself; a merged route also lists the sibling it
+    # absorbed. Persisted to route_subroutes.
+    subroute_uids: dict[str, int] = field(default_factory=dict)
 
 
 def _name_parts(value: dict | None) -> tuple[str | None, str | None]:
@@ -222,13 +229,122 @@ def _operator_names_from_route(route: dict | None) -> list[str]:
     return names
 
 
+def _subroute_group_key(route: dict, subroute: dict) -> tuple[str, str] | None:
+    """Key that identifies direction siblings of the same line.
+
+    ``RouteUID`` alone is too coarse: under 公路客運 the lettered variants
+    (1815, 1815A … 1815G) all share one RouteUID, so the SubRouteName has to be
+    part of the key. Only ``.strip()`` is applied — any further normalization
+    (casefolding, width folding) would risk merging genuinely distinct routes.
+    """
+    route_uid = (route.get("RouteUID") or route.get("RouteID") or "").strip()
+    subroute_name, _ = _name_parts(subroute.get("SubRouteName"))
+    if not route_uid or not subroute_name:
+        return None
+    return route_uid, subroute_name
+
+
+def _choose_canonical(
+    members: list[tuple[str, int]],
+    previous_canonical: dict[str, str],
+) -> str:
+    """Pick the SubRouteUID that survives a merge.
+
+    Lowest direction wins, ties broken lexicographically — but if a previous sync
+    already picked a canonical that is still part of this group, keep it. Without
+    that override, TDX later publishing a direction 0 for a group that is
+    currently direction-1-only would flip the surviving routeid and break a
+    second wave of saved favorites.
+    """
+    member_uids = {subroute_uid for subroute_uid, _ in members}
+    for subroute_uid, _direction in members:
+        candidate = previous_canonical.get(subroute_uid)
+        if candidate and candidate in member_uids:
+            return candidate
+    return members[0][0]
+
+
+def _group_subroutes(
+    routes: list[dict],
+    previous_canonical: dict[str, str],
+) -> dict[str, str]:
+    """Map absorbed SubRouteUIDs to the canonical routeid that replaces them.
+
+    Only genuine direction siblings are merged; singletons are absent from the
+    result so callers fall back to identity.
+    """
+    grouped: dict[tuple[str, str], dict[str, set[int]]] = {}
+    for route in routes:
+        for subroute in route.get("SubRoutes") or []:
+            subroute_uid = (subroute.get("SubRouteUID") or "").strip()
+            if not subroute_uid:
+                continue
+            key = _subroute_group_key(route, subroute)
+            if key is None:
+                continue
+            directions = grouped.setdefault(key, {}).setdefault(subroute_uid, set())
+            directions.add(int(subroute.get("Direction") or 0))
+
+    alias_map: dict[str, str] = {}
+    for (route_uid, subroute_name), directions_by_uid in grouped.items():
+        if len(directions_by_uid) < 2:
+            continue
+
+        # A SubRouteUID that already carries both directions is the shape the
+        # six metros use, and it is already correct. Merging anything on top of
+        # it would be guesswork, so leave the whole group alone.
+        if any(len(directions) > 1 for directions in directions_by_uid.values()):
+            LOGGER.warning(
+                "skipping direction merge route_uid=%s subroute=%s: a subroute already spans directions",
+                route_uid,
+                subroute_name,
+            )
+            continue
+
+        members = sorted(
+            ((uid, next(iter(directions))) for uid, directions in directions_by_uid.items()),
+            key=lambda member: (member[1], member[0]),
+        )
+        directions = [direction for _, direction in members]
+        if len(set(directions)) != len(directions):
+            LOGGER.warning(
+                "skipping direction merge route_uid=%s subroute=%s: duplicate directions %s",
+                route_uid,
+                subroute_name,
+                sorted(directions),
+            )
+            continue
+
+        canonical = _choose_canonical(members, previous_canonical)
+        for subroute_uid, _direction in members:
+            if subroute_uid != canonical:
+                alias_map[subroute_uid] = canonical
+
+    return alias_map
+
+
+def _alias_map_from_routes(static_routes: dict[str, StaticRoute]) -> dict[str, str]:
+    """Derive SubRouteUID -> routeid from built routes, in their own namespace."""
+    return {
+        subroute_uid: route.routeid
+        for route in static_routes.values()
+        for subroute_uid in route.subroute_uids
+    }
+
+
 def _build_static_routes(
     routes: list[dict],
     stop_of_route_items: list[dict],
     shapes: list[dict],
+    *,
+    merge_directions: bool = True,
+    previous_canonical: dict[str, str] | None = None,
 ) -> dict[str, StaticRoute]:
     subroute_lookup: dict[tuple[str, int], tuple[dict | None, dict | None]] = {}
     static_routes: dict[str, StaticRoute] = {}
+    alias_map = (
+        _group_subroutes(routes, previous_canonical or {}) if merge_directions else {}
+    )
 
     for route in routes:
         route_uid = route.get("RouteUID") or route.get("RouteID") or ""
@@ -236,9 +352,10 @@ def _build_static_routes(
         operator_names = _operator_names_from_route(route)
 
         for item in route.get("SubRoutes") or []:
-            routeid = item.get("SubRouteUID") or route_uid
-            if not routeid:
+            subroute_uid = item.get("SubRouteUID") or route_uid
+            if not subroute_uid:
                 continue
+            routeid = alias_map.get(subroute_uid, subroute_uid)
 
             route_name, route_name_en = _name_parts(item.get("SubRouteName"))
             if not route_name:
@@ -278,6 +395,7 @@ def _build_static_routes(
                     static_route.operator_names.append(operator_name)
 
             pathid = int(item.get("Direction") or 0)
+            static_route.subroute_uids.setdefault(subroute_uid, pathid)
             path_name, path_name_en = _path_name_from_route_and_subroute(route, item, pathid)
             static_route.paths.setdefault(
                 pathid,
@@ -286,15 +404,17 @@ def _build_static_routes(
             subroute_lookup[(routeid, pathid)] = (route, item)
 
     for item in stop_of_route_items:
-        routeid = item.get("SubRouteUID") or item.get("RouteUID")
-        if not routeid:
+        subroute_uid = item.get("SubRouteUID") or item.get("RouteUID")
+        if not subroute_uid:
             continue
+        routeid = alias_map.get(subroute_uid, subroute_uid)
 
         pathid = int(item.get("Direction") or 0)
         static_route = static_routes.setdefault(
             routeid,
             StaticRoute(routeid=routeid, name=routeid, name_en=None, route_uid=item.get("RouteUID") or routeid),
         )
+        static_route.subroute_uids.setdefault(subroute_uid, pathid)
 
         route_item, subroute = subroute_lookup.get((routeid, pathid), (None, None))
         path_name, path_name_en = _path_name_from_route_and_subroute(route_item, subroute, pathid)
@@ -325,15 +445,17 @@ def _build_static_routes(
             path.stops = stops
 
     for item in shapes:
-        routeid = item.get("SubRouteUID") or item.get("RouteUID")
-        if not routeid:
+        subroute_uid = item.get("SubRouteUID") or item.get("RouteUID")
+        if not subroute_uid:
             continue
+        routeid = alias_map.get(subroute_uid, subroute_uid)
 
         pathid = int(item.get("Direction") or 0)
         static_route = static_routes.setdefault(
             routeid,
             StaticRoute(routeid=routeid, name=routeid, name_en=None, route_uid=item.get("RouteUID") or routeid),
         )
+        static_route.subroute_uids.setdefault(subroute_uid, pathid)
         route_item, subroute = subroute_lookup.get((routeid, pathid), (None, None))
         path_name, path_name_en = _path_name_from_route_and_subroute(route_item, subroute, pathid)
         path = static_route.paths.setdefault(
@@ -347,7 +469,13 @@ def _build_static_routes(
     return static_routes
 
 
-def _copy_route_with_routeid(route: StaticRoute, routeid: str) -> StaticRoute:
+def _copy_route_with_routeid(
+    route: StaticRoute,
+    routeid: str,
+    *,
+    subroute_uid_mapper: Callable[[str], str] | None = None,
+) -> StaticRoute:
+    mapper = subroute_uid_mapper or (lambda value: value)
     return StaticRoute(
         routeid=routeid,
         name=route.name,
@@ -359,6 +487,10 @@ def _copy_route_with_routeid(route: StaticRoute, routeid: str) -> StaticRoute:
         destination_en=route.destination_en,
         operator_names=list(route.operator_names),
         paths=dict(route.paths),
+        subroute_uids={
+            mapper(subroute_uid): direction
+            for subroute_uid, direction in route.subroute_uids.items()
+        },
     )
 
 
@@ -367,6 +499,7 @@ def _prefix_inter_routes(static_routes: dict[str, StaticRoute]) -> dict[str, Sta
         to_intercity_routeid(routeid): _copy_route_with_routeid(
             route,
             to_intercity_routeid(routeid),
+            subroute_uid_mapper=to_intercity_routeid,
         )
         for routeid, route in static_routes.items()
     }
@@ -381,6 +514,21 @@ def _replace_main_route(connection, route: StaticRoute) -> None:
         (route.routeid, route.name, route.name_en),
     )
     connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
+    connection.execute("DELETE FROM route_subroutes WHERE routeid = ?", (route.routeid,))
+
+    # Sorted so that repeated syncs produce byte-identical rows; database
+    # versions are content-hash driven.
+    subroute_uids = route.subroute_uids or {route.routeid: min(route.paths, default=0)}
+    for subroute_uid, direction in sorted(
+        subroute_uids.items(), key=lambda item: (item[1], item[0])
+    ):
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO route_subroutes (subroute_uid, routeid, direction)
+            VALUES (?, ?, ?)
+            """,
+            (subroute_uid, route.routeid, direction),
+        )
 
     for path in sorted(route.paths.values(), key=lambda item: item.pathid):
         connection.execute(
@@ -648,6 +796,39 @@ def _copy_main_routes_by_prefix(source_connection, target_connection, prefix: st
             ],
         )
 
+    # Carried forward with everything else: this is the 304 "reuse previous
+    # static data" path, and dropping the alias rows here would silently break
+    # realtime and stale-routeid resolution for every unchanged city. The source
+    # may predate the table on the first run after deploying.
+    subroute_rows = (
+        source_connection.execute(
+            """
+            SELECT subroute_uid, routeid, direction
+            FROM route_subroutes
+            WHERE routeid LIKE ?
+            ORDER BY routeid, direction, subroute_uid
+            """,
+            (route_pattern,),
+        ).fetchall()
+        if has_route_subroutes_table(source_connection)
+        else []
+    )
+    if subroute_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO route_subroutes (subroute_uid, routeid, direction)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (
+                    row["subroute_uid"],
+                    row["routeid"],
+                    row["direction"],
+                )
+                for row in subroute_rows
+            ],
+        )
+
     point_rows = source_connection.execute(
         """
         SELECT routeid, pathid, seq, lat, lon
@@ -871,6 +1052,7 @@ def _sync_route_schedules(
     *,
     table_name: str,
     routeid_mapper: Callable[[str], str] | None = None,
+    subroute_uid_mapper: Callable[[str], str] | None = None,
 ) -> None:
     for sched in schedules_raw:
         route_uid = sched.get("SubRouteUID") or sched.get("RouteUID")
@@ -881,7 +1063,15 @@ def _sync_route_schedules(
             continue
         direction = int(sched.get("Direction") or 0)
         subroute_uid = sched.get("SubRouteUID") or ""
-        mapped_subroute_uid = routeid_mapper(subroute_uid) if routeid_mapper and subroute_uid else subroute_uid
+        # Deliberately NOT alias-collapsed: the primary key is
+        # (routeid, subroute_uid, direction, kind, seq), so keeping the original
+        # per-direction SubRouteUID is what lets both directions of a merged
+        # route keep their own timetable rows.
+        mapped_subroute_uid = (
+            subroute_uid_mapper(subroute_uid)
+            if subroute_uid_mapper and subroute_uid
+            else subroute_uid
+        )
 
         for freq_seq, freq in enumerate(sched.get("Frequencys") or []):
             sd = freq.get("ServiceDay") or {}
@@ -1094,6 +1284,16 @@ def sync_static(
                     _copy_non_static_fetch_state(source_connection, connection)
                     _copy_database_versions(source_connection, connection)
 
+            # Which routeid survived each merge last time. Reused so that a
+            # group gaining a new direction does not flip its canonical id and
+            # invalidate a second wave of saved favorites.
+            previous_canonical = (
+                load_route_subroute_map(source_connection)
+                if source_connection is not None
+                else {}
+            )
+            merge_directions = settings.static_merge_directions
+
             processed_cities: set[str] = set()
             processed_prefixes: set[str] = {INTERCITY_PREFIX}
 
@@ -1210,7 +1410,23 @@ def sync_static(
                 routes = routes_response.payload or []
                 stop_of_route_items = stops_response.payload or []
                 shapes = shapes_response.payload or []
-                static_routes = _build_static_routes(routes, stop_of_route_items, shapes)
+                static_routes = _build_static_routes(
+                    routes,
+                    stop_of_route_items,
+                    shapes,
+                    merge_directions=merge_directions,
+                    previous_canonical=previous_canonical,
+                )
+                # SubRouteUID -> surviving routeid, identity included. Every
+                # downstream sync must go through this or the rows belonging to
+                # an absorbed direction are silently dropped.
+                route_alias_map = _alias_map_from_routes(static_routes)
+
+                def _city_routeid_mapper(
+                    subroute_uid: str,
+                    _alias_map: dict[str, str] = route_alias_map,
+                ) -> str:
+                    return _alias_map.get(subroute_uid, subroute_uid)
 
                 prefix = CITY_NAME_TO_PREFIX.get(city)
                 if prefix:
@@ -1238,6 +1454,7 @@ def sync_static(
                             routes,
                             set(static_routes),
                             table_name="route_operators",
+                            routeid_mapper=_city_routeid_mapper,
                         )
 
                 # --- Sync Schedules ---
@@ -1257,6 +1474,7 @@ def sync_static(
                             schedules_raw,
                             set(static_routes),
                             table_name="route_schedules",
+                            routeid_mapper=_city_routeid_mapper,
                         )
                         connection.execute(
                             "DELETE FROM stop_travel_times WHERE routeid LIKE ? AND source = 'timetable'",
@@ -1267,6 +1485,7 @@ def sync_static(
                             schedules_raw,
                             set(static_routes),
                             table_name="stop_travel_times",
+                            routeid_mapper=_city_routeid_mapper,
                         )
 
                 if prefix:
@@ -1395,12 +1614,31 @@ def sync_static(
                 inter_routes_raw = inter_routes_response.payload or []
                 inter_stop_of_route_items = inter_stops_response.payload or []
                 inter_shapes_raw = inter_shapes_response.payload or []
+                # The intercity build runs in TDX's own namespace, so the
+                # remembered canonicals have to have their INT prefix stripped
+                # before they can be matched.
+                inter_previous_canonical = {
+                    from_intercity_routeid(subroute_uid): from_intercity_routeid(canonical)
+                    for subroute_uid, canonical in previous_canonical.items()
+                    if subroute_uid.startswith(INTERCITY_PREFIX)
+                }
                 inter_static_routes = _build_static_routes(
                     inter_routes_raw,
                     inter_stop_of_route_items,
                     inter_shapes_raw,
+                    merge_directions=merge_directions,
+                    previous_canonical=inter_previous_canonical,
                 )
                 merged_inter_routes = _prefix_inter_routes(inter_static_routes)
+                inter_alias_map = _alias_map_from_routes(merged_inter_routes)
+
+                def _inter_routeid_mapper(
+                    subroute_uid: str,
+                    _alias_map: dict[str, str] = inter_alias_map,
+                ) -> str:
+                    local = to_intercity_routeid(subroute_uid)
+                    return _alias_map.get(local, local)
+
                 inter_operators_raw = client.fetch_paginated_items("/v2/Bus/Operator/InterCity")
                 inter_schedules_raw = client.fetch_paginated_items("/v2/Bus/Schedule/InterCity")
 
@@ -1422,14 +1660,15 @@ def sync_static(
                         inter_routes_raw,
                         set(merged_inter_routes),
                         table_name="route_operators",
-                        routeid_mapper=to_intercity_routeid,
+                        routeid_mapper=_inter_routeid_mapper,
                     )
                     _sync_route_schedules(
                         connection,
                         inter_schedules_raw,
                         set(merged_inter_routes),
                         table_name="route_schedules",
-                        routeid_mapper=to_intercity_routeid,
+                        routeid_mapper=_inter_routeid_mapper,
+                        subroute_uid_mapper=to_intercity_routeid,
                     )
                     connection.execute(
                         "DELETE FROM stop_travel_times WHERE routeid LIKE ? AND source = 'timetable'",
@@ -1440,7 +1679,7 @@ def sync_static(
                         inter_schedules_raw,
                         set(merged_inter_routes),
                         table_name="stop_travel_times",
-                        routeid_mapper=to_intercity_routeid,
+                        routeid_mapper=_inter_routeid_mapper,
                     )
 
                 LOGGER.info(

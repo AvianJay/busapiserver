@@ -546,6 +546,36 @@ class CityVersionTableTests(unittest.TestCase):
         self.assertEqual(DOWNLOAD_VERSION_TABLES, ("routes", "paths"))
         self.assertEqual(CITY_VERSION_TABLES, ("stops",))
 
+    def test_route_subroutes_is_deliberately_not_hashed(self) -> None:
+        # route_subroutes is server-internal plumbing for resolving routeids
+        # absorbed by a direction merge. Adding it here would change the frozen
+        # hash and force every client to re-download.
+        self.assertNotIn("route_subroutes", MAIN_VERSION_TABLES)
+        self.assertNotIn("route_subroutes", DOWNLOAD_VERSION_TABLES)
+        self.assertNotIn("route_subroutes", CITY_VERSION_TABLES)
+
+
+class RouteSubroutesVersionTests(DatabaseVersionTestCase):
+    def test_alias_rows_alone_do_not_bump_the_main_version(self) -> None:
+        self._seed_route()
+        export_download_db(self.db_path, self.download_db_path)
+        self._refresh()
+        before = self._version("main")
+
+        with get_connection(self.db_path) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO route_subroutes (subroute_uid, routeid, direction)
+                    VALUES (?, ?, ?)
+                    """,
+                    ("TPE001", "TPE001", 0),
+                )
+
+        self._refresh()
+
+        self.assertEqual(self._version("main"), before)
+
 
 if __name__ == "__main__":
     unittest.main()

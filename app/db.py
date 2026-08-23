@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS route_operators (
 CREATE INDEX IF NOT EXISTS idx_route_operators_routeid ON route_operators(routeid);
 CREATE INDEX IF NOT EXISTS idx_route_operators_operator ON route_operators(operator_id);
 
+-- Maps every TDX SubRouteUID (in the local namespace, i.e. INT-prefixed for
+-- intercity) to the canonical routeid that absorbed it. Some authorities give
+-- each direction of a route its own SubRouteUID; sync_static merges those into
+-- one route with two paths, and this table remembers the original ids so that
+-- realtime lookups can still query TDX and so that stale client routeids keep
+-- resolving. Singleton routes get an identity row (subroute_uid == routeid).
+CREATE TABLE IF NOT EXISTS route_subroutes (
+    subroute_uid TEXT PRIMARY KEY,
+    routeid      TEXT NOT NULL,
+    direction    INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_subroutes_routeid ON route_subroutes(routeid);
+
 CREATE TABLE IF NOT EXISTS route_schedules (
     routeid       TEXT NOT NULL,
     subroute_uid  TEXT NOT NULL DEFAULT '',
@@ -704,6 +719,45 @@ def delete_main_routes_by_prefix(connection: sqlite3.Connection, prefix: str) ->
         "DELETE FROM routes WHERE routeid LIKE ?",
         (f"{prefix}%",),
     )
+
+
+def has_route_subroutes_table(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'route_subroutes' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def load_route_subroute_map(connection: sqlite3.Connection) -> dict[str, str]:
+    """Map every known SubRouteUID to the canonical routeid that absorbed it.
+
+    Returns an empty mapping on databases predating ``route_subroutes`` so that
+    callers degrade to identity behaviour instead of failing.
+    """
+    if not has_route_subroutes_table(connection):
+        return {}
+
+    rows = connection.execute("SELECT subroute_uid, routeid FROM route_subroutes").fetchall()
+    return {row["subroute_uid"]: row["routeid"] for row in rows}
+
+
+def load_route_subroute_expansion(connection: sqlite3.Connection) -> dict[str, list[str]]:
+    """Map every canonical routeid to the SubRouteUIDs it must be queried by."""
+    if not has_route_subroutes_table(connection):
+        return {}
+
+    rows = connection.execute(
+        """
+        SELECT routeid, subroute_uid
+        FROM route_subroutes
+        ORDER BY routeid, direction, subroute_uid
+        """
+    ).fetchall()
+
+    expansion: dict[str, list[str]] = {}
+    for row in rows:
+        expansion.setdefault(row["routeid"], []).append(row["subroute_uid"])
+    return expansion
 
 
 def clear_inter_db(connection: sqlite3.Connection) -> None:

@@ -12,6 +12,7 @@ import requests
 
 from app.config import Settings, from_intercity_routeid, is_intercity_city
 from app.logging_utils import get_logger
+from app.route_aliases import get_route_alias_index
 from app.tdx_auth import TDXTokenManager
 
 LOGGER = get_logger("tdx_client")
@@ -172,14 +173,31 @@ class TDXClient:
         return f"/v2/Bus/{resource}/City/{city}"
 
     def _normalize_routeids_for_city(self, city: str, routeids: Iterable[str]) -> list[str]:
+        """Turn local routeids into the SubRouteUIDs TDX filters on.
+
+        A merged route absorbed one SubRouteUID per direction, and TDX realtime
+        is filtered by SubRouteUID, so every absorbed id has to be sent or the
+        return direction reports no arrivals at all. Filtering on RouteUID
+        instead is not an option: under 公路客運 a single RouteUID also covers
+        the lettered variants (1815A … 1815G).
+        """
+        alias_index = get_route_alias_index(self.settings)
         normalized: list[str] = []
+        seen: set[str] = set()
         for routeid in routeids:
             cleaned = routeid.strip()
             if not cleaned:
                 continue
-            normalized.append(
-                from_intercity_routeid(cleaned) if is_intercity_city(city) else cleaned
-            )
+            for subroute_uid in alias_index.subroute_uids(cleaned):
+                mapped = (
+                    from_intercity_routeid(subroute_uid)
+                    if is_intercity_city(city)
+                    else subroute_uid
+                )
+                if mapped in seen:
+                    continue
+                seen.add(mapped)
+                normalized.append(mapped)
         return normalized
 
     def _build_subroute_filter(self, routeids: Iterable[str]) -> str:
