@@ -208,6 +208,63 @@ class StopPassbyApiTests(unittest.TestCase):
         response = self.client.get("/api/v1/stops/bad%20id/passby")
         self.assertEqual(response.status_code, 400)
 
+    def _seed_colliding_cities(self) -> None:
+        # Numeric TDX StopIDs are only unique per authority: Taichung's "39"
+        # and Matsu's "39" are different physical stops that share an id.
+        self._seed_route("TXG0001", "1", [(0, 3, "39", "中臺科技大學")])
+        self._seed_route("LIE16", "海線", [(0, 1, "39", "福澳碼頭")])
+
+    def test_city_prefix_scopes_colliding_stopids(self) -> None:
+        self._seed_colliding_cities()
+
+        response = self.client.get("/api/v1/stops/39/passby?city=TXG")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["stop_name"], "中臺科技大學")
+        self.assertEqual(
+            [route["routeid"] for route in body["routes"]],
+            ["TXG0001"],
+        )
+        self.assertEqual(self.service.requested_routeids, ["TXG0001"])
+
+    def test_city_prefix_is_case_insensitive(self) -> None:
+        self._seed_colliding_cities()
+
+        response = self.client.get("/api/v1/stops/39/passby?city=lie")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["stop_name"], "福澳碼頭")
+        self.assertEqual(
+            [route["routeid"] for route in body["routes"]],
+            ["LIE16"],
+        )
+
+    def test_omitted_city_keeps_legacy_nationwide_lookup(self) -> None:
+        self._seed_colliding_cities()
+
+        response = self.client.get("/api/v1/stops/39/passby")
+
+        self.assertEqual(response.status_code, 200)
+        routeids = {route["routeid"] for route in response.json()["routes"]}
+        self.assertEqual(routeids, {"TXG0001", "LIE16"})
+
+    def test_unknown_city_prefix_returns_400(self) -> None:
+        self._seed_colliding_cities()
+
+        response = self.client.get("/api/v1/stops/39/passby?city=XXX")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_scoped_lookup_misses_return_404(self) -> None:
+        self._seed_colliding_cities()
+
+        # The stop exists, but not in the requested city.
+        response = self.client.get("/api/v1/stops/39/passby?city=TPE")
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

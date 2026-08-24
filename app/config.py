@@ -176,6 +176,11 @@ class Settings:
     # two paths. Turning this off reproduces the pre-merge rows byte for byte,
     # so a rollback is one env change plus a re-sync.
     static_merge_directions: bool = True
+    # Cities whose realtime feeds stopped populating SubRouteUID (items carry
+    # only RouteUID + Direction). Their batch requests filter on RouteUID
+    # instead — a SubRouteUID filter matches nothing there. Set the env var to
+    # an empty value to fall back to the legacy SubRouteUID filter everywhere.
+    tdx_routeuid_filter_cities: tuple[str, ...] = ("Taipei", "NewTaipei")
 
     def __post_init__(self) -> None:
         if self.app_db_path is None:
@@ -277,6 +282,14 @@ class Settings:
             ),
             account_sync_max_json_depth=int(
                 os.getenv("ACCOUNT_SYNC_MAX_JSON_DEPTH", "16")
+            ),
+            # Unlike the other CSV vars, an explicitly empty value means
+            # "no cities" (i.e. legacy SubRouteUID filters everywhere), so the
+            # unset/empty distinction matters here.
+            tdx_routeuid_filter_cities=(
+                ("Taipei", "NewTaipei")
+                if os.getenv("TDX_ROUTEUID_FILTER_CITIES") is None
+                else _split_csv(os.getenv("TDX_ROUTEUID_FILTER_CITIES"), ())
             ),
         )
 

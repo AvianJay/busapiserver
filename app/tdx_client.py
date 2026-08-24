@@ -200,21 +200,64 @@ class TDXClient:
                 normalized.append(mapped)
         return normalized
 
-    def _build_subroute_filter(self, routeids: Iterable[str]) -> str:
+    def _normalize_route_uids_for_city(self, city: str, routeids: Iterable[str]) -> list[str]:
+        """Turn local routeids into the RouteUIDs TDX filters on.
+
+        雙北 realtime items stopped carrying SubRouteUID, so a SubRouteUID
+        filter matches nothing there — RouteUID is the only id those feeds tag
+        reliably. Unmapped routeids fall back to themselves, which is exact
+        for identity-style ids and at worst an empty match for the rest.
+        Variant families collapse onto one RouteUID, so duplicates are
+        expected and dropped.
+        """
+        alias_index = get_route_alias_index(self.settings)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for routeid in routeids:
+            cleaned = routeid.strip()
+            if not cleaned:
+                continue
+            canonical = alias_index.canonical(cleaned)
+            route_uid = alias_index.route_uid_for(canonical) or canonical
+            mapped = (
+                from_intercity_routeid(route_uid)
+                if is_intercity_city(city)
+                else route_uid
+            )
+            if mapped in seen:
+                continue
+            seen.add(mapped)
+            normalized.append(mapped)
+        return normalized
+
+    def _uses_routeuid_filter(self, city: str) -> bool:
+        return city in getattr(self.settings, "tdx_routeuid_filter_cities", ())
+
+    def _build_subroute_filter(
+        self,
+        routeids: Iterable[str],
+        *,
+        field: str = "SubRouteUID",
+    ) -> str:
         clauses = []
         for routeid in routeids:
             escaped = routeid.replace("'", "''")
-            clauses.append(f"SubRouteUID eq '{escaped}'")
+            clauses.append(f"{field} eq '{escaped}'")
         return " or ".join(clauses)
 
-    def _chunk_routeids_for_filter(self, routeids: Iterable[str]) -> list[list[str]]:
+    def _chunk_routeids_for_filter(
+        self,
+        routeids: Iterable[str],
+        *,
+        field: str = "SubRouteUID",
+    ) -> list[list[str]]:
         chunks: list[list[str]] = []
         current_chunk: list[str] = []
         current_length = 0
 
         for routeid in routeids:
             escaped = routeid.replace("'", "''")
-            clause = f"SubRouteUID eq '{escaped}'"
+            clause = f"{field} eq '{escaped}'"
             clause_length = len(clause) if not current_chunk else len(" or ") + len(clause)
             if current_chunk and (len(current_chunk) >= 25 or current_length + clause_length > 1500):
                 chunks.append(current_chunk)
@@ -337,6 +380,13 @@ class TDXClient:
         *,
         if_modified_since: str | None = None,
     ) -> TDXJSONResponse:
+        if self._uses_routeuid_filter(city):
+            return self._fetch_subroute_batch(
+                self._bus_resource_path(city, "EstimatedTimeOfArrival"),
+                self._normalize_route_uids_for_city(city, routeids),
+                field="RouteUID",
+                if_modified_since=if_modified_since,
+            )
         normalized_routeids = self._normalize_routeids_for_city(city, routeids)
         return self._fetch_subroute_batch(
             self._bus_resource_path(city, "EstimatedTimeOfArrival"),
@@ -349,6 +399,7 @@ class TDXClient:
         path: str,
         routeids: Iterable[str],
         *,
+        field: str = "SubRouteUID",
         if_modified_since: str | None = None,
     ) -> TDXJSONResponse:
         deduped_routeids: list[str] = []
@@ -363,12 +414,12 @@ class TDXClient:
         if not deduped_routeids:
             return TDXJSONResponse(payload=[], status_code=200, last_modified=None)
 
-        chunks = self._chunk_routeids_for_filter(deduped_routeids)
+        chunks = self._chunk_routeids_for_filter(deduped_routeids, field=field)
         if len(chunks) == 1:
             response = self._request_json_with_meta(
                 path,
                 params={
-                    "$filter": self._build_subroute_filter(chunks[0]),
+                    "$filter": self._build_subroute_filter(chunks[0], field=field),
                     "$format": "JSON",
                     "$top": 2000,
                 },
@@ -392,7 +443,7 @@ class TDXClient:
             response = self._request_json_with_meta(
                 path,
                 params={
-                    "$filter": self._build_subroute_filter(chunk),
+                    "$filter": self._build_subroute_filter(chunk, field=field),
                     "$format": "JSON",
                     "$top": 2000,
                 },
@@ -415,6 +466,13 @@ class TDXClient:
         *,
         if_modified_since: str | None = None,
     ) -> TDXJSONResponse:
+        if self._uses_routeuid_filter(city):
+            return self._fetch_subroute_batch(
+                self._bus_resource_path(city, "RealTimeByFrequency"),
+                self._normalize_route_uids_for_city(city, routeids),
+                field="RouteUID",
+                if_modified_since=if_modified_since,
+            )
         normalized_routeids = self._normalize_routeids_for_city(city, routeids)
         return self._fetch_subroute_batch(
             self._bus_resource_path(city, "RealTimeByFrequency"),

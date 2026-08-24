@@ -571,7 +571,11 @@ _stop_passby_id_pattern = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @router.get("/api/v1/stops/{stopid}/passby")
-def get_stop_passby(stopid: str, request: Request) -> dict:
+def get_stop_passby(
+    stopid: str,
+    request: Request,
+    city: str = Query(default="", max_length=8),
+) -> dict:
     """Return the routes passing a stop, each with only that stop's realtime ETA.
 
     A single stop can be served by dozens of routes.  Rather than have the
@@ -581,15 +585,31 @@ def get_stop_passby(stopid: str, request: Request) -> dict:
     city via the realtime service), and returns just the single stop bucket
     for each route.  The payload is therefore proportional to the number of
     passing routes, not to the total number of stops across them.
+
+    TDX StopIDs are only unique within a single authority — Taichung's "39"
+    is a different physical stop from Matsu's "39" — so ``city`` (a routeid
+    prefix such as ``TXG`` or ``INT``) scopes the lookup to one authority.
+    Omitting it keeps the legacy nationwide behaviour for older clients.
     """
     normalized_stopid = stopid.strip()
     if not normalized_stopid or not _stop_passby_id_pattern.fullmatch(normalized_stopid):
         raise HTTPException(status_code=400, detail=f"Invalid stop ID: {stopid!r}")
 
+    routeid_prefix = city.strip().upper()
+    if routeid_prefix and routeid_prefix not in CITY_PREFIX_TO_NAME:
+        raise HTTPException(status_code=400, detail=f"Unknown city prefix: {city!r}")
+
+    prefix_clause = "AND s.routeid LIKE ?" if routeid_prefix else ""
+    query_args: tuple[str, ...] = (
+        (normalized_stopid, f"{routeid_prefix}%")
+        if routeid_prefix
+        else (normalized_stopid,)
+    )
+
     settings = request.app.state.settings
     with get_connection(settings.db_path) as connection:
         stop_rows = connection.execute(
-            """
+            f"""
             SELECT
                 s.routeid AS routeid,
                 s.pathid AS pathid,
@@ -602,10 +622,10 @@ def get_stop_passby(stopid: str, request: Request) -> dict:
             FROM stops s
             JOIN routes r ON r.routeid = s.routeid
             LEFT JOIN paths p ON p.routeid = s.routeid AND p.pathid = s.pathid
-            WHERE s.stopid = ?
+            WHERE s.stopid = ? {prefix_clause}
             ORDER BY s.routeid ASC, s.pathid ASC
             """,
-            (normalized_stopid,),
+            query_args,
         ).fetchall()
 
     if not stop_rows:

@@ -109,6 +109,42 @@ def _tdx_routeid_to_local(city: str, routeid: Any, *, settings: Settings | None 
     return get_route_alias_index(settings).canonical(normalized)
 
 
+def _tdx_item_to_local(
+    city: str,
+    item: dict[str, Any],
+    *,
+    settings: Settings | None = None,
+) -> str | None:
+    """Resolve a TDX realtime item onto the local canonical routeid.
+
+    Items normally carry SubRouteUID and resolve through the alias table. 雙北
+    feeds stopped populating SubRouteUID — their items are tagged with only
+    RouteUID + Direction — so those fall back to the persisted/derived RouteUID
+    mapping. A RouteUID shared by several routes (區間/lettered variants)
+    resolves to None and the item is dropped rather than guessed at.
+    """
+    subroute_uid = item.get("SubRouteUID")
+    if subroute_uid is not None and str(subroute_uid).strip():
+        return _tdx_routeid_to_local(city, subroute_uid, settings=settings)
+
+    route_uid = str(item.get("RouteUID") or "").strip()
+    if not route_uid:
+        return None
+    if settings is not None:
+        try:
+            direction: int | None = int(item.get("Direction"))
+        except (TypeError, ValueError):
+            direction = None
+        local = get_route_alias_index(settings).routeid_for_route_uid(
+            route_uid, direction
+        )
+        if local is not None:
+            return local
+    # Legacy shape: treat the RouteUID as a routeid, which is exact for
+    # identity-style ids and mirrors the old SubRouteUID-or-RouteUID fallback.
+    return _tdx_routeid_to_local(city, route_uid, settings=settings)
+
+
 def _to_unix_seconds(value: str | None) -> int | None:
     if not value:
         return None
@@ -1280,21 +1316,13 @@ class RealtimeService:
         )
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
-            routeid = _tdx_routeid_to_local(
-                city,
-                item.get("SubRouteUID") or item.get("RouteUID"),
-                settings=self.settings,
-            )
+            routeid = _tdx_item_to_local(city, item, settings=self.settings)
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
 
         buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in buses_response.payload or []:
-            routeid = _tdx_routeid_to_local(
-                city,
-                item.get("SubRouteUID") or item.get("RouteUID"),
-                settings=self.settings,
-            )
+            routeid = _tdx_item_to_local(city, item, settings=self.settings)
             if routeid in static_routes:
                 buses_by_route[routeid].append(item)
         self._apply_ntpc_eta_fallback(city, static_routes, items_by_route, buses_by_route)
@@ -1374,21 +1402,13 @@ class RealtimeService:
         )
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
-            routeid = _tdx_routeid_to_local(
-                city,
-                item.get("SubRouteUID") or item.get("RouteUID"),
-                settings=self.settings,
-            )
+            routeid = _tdx_item_to_local(city, item, settings=self.settings)
             if routeid in static_routes:
                 items_by_route[routeid].append(item)
 
         buses_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in buses_response.payload or []:
-            routeid = _tdx_routeid_to_local(
-                city,
-                item.get("SubRouteUID") or item.get("RouteUID"),
-                settings=self.settings,
-            )
+            routeid = _tdx_item_to_local(city, item, settings=self.settings)
             if routeid in static_routes:
                 buses_by_route[routeid].append(item)
         self._apply_ntpc_eta_fallback(city, static_routes, items_by_route, buses_by_route)
@@ -1869,11 +1889,7 @@ class RouteBusesService:
 
         items_by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in response.payload or []:
-            routeid = _tdx_routeid_to_local(
-                city,
-                item.get("SubRouteUID") or item.get("RouteUID"),
-                settings=self.settings,
-            )
+            routeid = _tdx_item_to_local(city, item, settings=self.settings)
             if routeid in stale_buses:
                 items_by_route[routeid].append(item)
 

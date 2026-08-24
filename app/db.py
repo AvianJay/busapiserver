@@ -91,6 +91,23 @@ CREATE TABLE IF NOT EXISTS route_subroutes (
 
 CREATE INDEX IF NOT EXISTS idx_route_subroutes_routeid ON route_subroutes(routeid);
 
+-- Maps a TDX RouteUID (raw, never INT-prefixed) and direction to the local
+-- routeid serving it. Needed because 雙北 realtime feeds stopped populating
+-- SubRouteUID: their items carry only RouteUID + Direction, so both the
+-- outbound $filter and the inbound bucketing must be able to translate
+-- RouteUID-level ids. A RouteUID shared by several distinct routes (公路客運
+-- lettered variants, Taipei 區間 families) is ambiguous and gets no rows for
+-- the conflicting directions — resolution simply fails closed for those.
+CREATE TABLE IF NOT EXISTS route_uids (
+    route_uid TEXT NOT NULL,
+    direction INTEGER NOT NULL DEFAULT 0,
+    routeid   TEXT NOT NULL,
+    PRIMARY KEY (route_uid, direction, routeid),
+    FOREIGN KEY (routeid) REFERENCES routes(routeid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_uids_routeid ON route_uids(routeid);
+
 CREATE TABLE IF NOT EXISTS route_schedules (
     routeid       TEXT NOT NULL,
     subroute_uid  TEXT NOT NULL DEFAULT '',
@@ -758,6 +775,34 @@ def load_route_subroute_expansion(connection: sqlite3.Connection) -> dict[str, l
     for row in rows:
         expansion.setdefault(row["routeid"], []).append(row["subroute_uid"])
     return expansion
+
+
+def has_route_uids_table(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'route_uids' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def load_route_uid_rows(
+    connection: sqlite3.Connection,
+) -> list[tuple[str, int, str]]:
+    """Every (route_uid, direction, routeid) row, deterministically ordered.
+
+    Returns an empty list on databases predating ``route_uids`` so that
+    callers degrade to derivation/identity behaviour instead of failing.
+    """
+    if not has_route_uids_table(connection):
+        return []
+
+    rows = connection.execute(
+        """
+        SELECT route_uid, direction, routeid
+        FROM route_uids
+        ORDER BY route_uid, direction, routeid
+        """
+    ).fetchall()
+    return [(row["route_uid"], row["direction"], row["routeid"]) for row in rows]
 
 
 def clear_inter_db(connection: sqlite3.Connection) -> None:

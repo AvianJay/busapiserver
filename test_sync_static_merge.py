@@ -20,6 +20,8 @@ from app.api.routes import router
 from app.db import get_connection, init_db
 from app.rate_limit import reset_rate_limit_state
 from app.sync_static import (
+    StaticPath,
+    StaticRoute,
     _alias_map_from_routes,
     _build_static_routes,
     _choose_canonical,
@@ -468,6 +470,65 @@ class PersistenceTests(unittest.TestCase):
         mapping = {row["subroute_uid"]: row["routeid"] for row in rows}
         self.assertEqual(mapping["THB181502"], "THB181501")
         self.assertEqual(len(mapping), 15)
+
+    def test_route_uid_rows_are_written_per_pathid(self) -> None:
+        static_routes = _build_static_routes(
+            _thb_1815_routes(),
+            _thb_1815_stop_of_route(),
+            [],
+        )
+        self._write(static_routes)
+        self._write(static_routes)  # rewriting must replace, not accumulate
+
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                "SELECT route_uid, direction, routeid FROM route_uids ORDER BY routeid, direction"
+            ).fetchall()
+
+        triples = {(row["route_uid"], row["direction"], row["routeid"]) for row in rows}
+        # The merged main variant covers both directions under one routeid...
+        self.assertIn(("THB1815", 0, "THB181501"), triples)
+        self.assertIn(("THB1815", 1, "THB181501"), triples)
+        # ...and the direction-1-only variant gets just its own direction.
+        self.assertIn(("THB1815", 1, "THB1815F2"), triples)
+        self.assertNotIn(("THB1815", 0, "THB1815F2"), triples)
+        # 7 two-direction routes + 1 single-direction route.
+        self.assertEqual(len(rows), 15)
+
+    def test_stub_routes_get_no_route_uid_rows(self) -> None:
+        stub = StaticRoute(
+            routeid="TPE10132",
+            name="TPE10132",
+            name_en=None,
+            route_uid="TPE10132",
+            paths={
+                0: StaticPath(pathid=0, name="Unknown", points=[(25.0, 121.5)]),
+                1: StaticPath(pathid=1, name="Unknown", points=[(25.1, 121.6)]),
+            },
+        )
+        self._write({stub.routeid: stub})
+
+        with get_connection(self.db_path) as connection:
+            count = connection.execute("SELECT COUNT(*) AS n FROM route_uids").fetchone()["n"]
+        self.assertEqual(count, 0)
+
+    def test_copy_main_routes_by_prefix_round_trips_route_uid_rows(self) -> None:
+        static_routes = _build_static_routes(
+            _thb_1815_routes(),
+            _thb_1815_stop_of_route(),
+            [],
+        )
+        self._write(static_routes)
+
+        target_path = Path(self.temp_dir.name) / "bus.db.tmp"
+        init_db(target_path)
+
+        with get_connection(self.db_path) as source, get_connection(target_path) as target:
+            with target:
+                _copy_main_routes_by_prefix(source, target, "THB")
+            count = target.execute("SELECT COUNT(*) AS n FROM route_uids").fetchone()["n"]
+
+        self.assertEqual(count, 15)
 
 
 class SearchResultTests(unittest.TestCase):

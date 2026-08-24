@@ -24,6 +24,7 @@ from app.db import (
     export_download_db,
     get_connection,
     has_route_subroutes_table,
+    has_route_uids_table,
     init_city_db,
     init_db,
     load_route_subroute_map,
@@ -515,6 +516,7 @@ def _replace_main_route(connection, route: StaticRoute) -> None:
     )
     connection.execute("DELETE FROM paths WHERE routeid = ?", (route.routeid,))
     connection.execute("DELETE FROM route_subroutes WHERE routeid = ?", (route.routeid,))
+    connection.execute("DELETE FROM route_uids WHERE routeid = ?", (route.routeid,))
 
     # Sorted so that repeated syncs produce byte-identical rows; database
     # versions are content-hash driven.
@@ -529,6 +531,20 @@ def _replace_main_route(connection, route: StaticRoute) -> None:
             """,
             (subroute_uid, route.routeid, direction),
         )
+
+    # RouteUID rows let realtime feeds that stopped populating SubRouteUID
+    # (雙北) resolve items back onto this route. Stub routes — shape/stop
+    # leftovers with no stops — are skipped so they can never shadow the real
+    # route serving the same RouteUID.
+    if route.route_uid and any(path.stops for path in route.paths.values()):
+        for pathid in sorted(route.paths):
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO route_uids (route_uid, direction, routeid)
+                VALUES (?, ?, ?)
+                """,
+                (route.route_uid, pathid, route.routeid),
+            )
 
     for path in sorted(route.paths.values(), key=lambda item: item.pathid):
         connection.execute(
@@ -826,6 +842,35 @@ def _copy_main_routes_by_prefix(source_connection, target_connection, prefix: st
                     row["direction"],
                 )
                 for row in subroute_rows
+            ],
+        )
+
+    route_uid_rows = (
+        source_connection.execute(
+            """
+            SELECT route_uid, direction, routeid
+            FROM route_uids
+            WHERE routeid LIKE ?
+            ORDER BY route_uid, direction, routeid
+            """,
+            (route_pattern,),
+        ).fetchall()
+        if has_route_uids_table(source_connection)
+        else []
+    )
+    if route_uid_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO route_uids (route_uid, direction, routeid)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (
+                    row["route_uid"],
+                    row["direction"],
+                    row["routeid"],
+                )
+                for row in route_uid_rows
             ],
         )
 
