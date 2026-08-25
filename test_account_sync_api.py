@@ -340,6 +340,512 @@ class AccountSyncApiTests(unittest.TestCase):
             },
         )
 
+    def test_favorites_v2_accepts_all_item_types_and_preserves_empty_typed_group(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:10:00Z",
+                "payload": {
+                    "groupKinds": {
+                        "路線": "route",
+                        "站牌": "station",
+                        "乘車": "boarding",
+                        "綜合": "mixed",
+                    },
+                    "groups": {
+                        "路線": [
+                            {
+                                "type": "route",
+                                "provider": "TPE",
+                                "routeKey": 101,
+                                "routeId": "TPE-101",
+                                "routeName": " 紅 12 ",
+                                "routeDescription": " 市政府－捷運站 ",
+                            }
+                        ],
+                        "站牌": [
+                            {
+                                "type": "station",
+                                "provider": "TPE",
+                                "stationId": "TPE-STATION-1",
+                                "stationName": " 市政府 ",
+                            }
+                        ],
+                        "乘車": [
+                            {
+                                "type": "boarding",
+                                "provider": "TPE",
+                                "routeKey": 101,
+                                "pathId": 0,
+                                "stopId": 202,
+                                "rawStopId": " TPE-STOP-202 ",
+                            }
+                        ],
+                        "綜合": [],
+                    },
+                },
+            },
+        )
+
+        document = result["document"]
+        self.assertEqual(document["schema_version"], 2)  # type: ignore[index]
+        payload = document["payload"]  # type: ignore[index]
+        self.assertEqual(payload["groupKinds"]["綜合"], "mixed")
+        self.assertEqual(payload["groups"]["路線"][0]["routeName"], "紅 12")
+        self.assertEqual(payload["groups"]["站牌"][0]["stationName"], "市政府")
+        self.assertEqual(payload["groups"]["乘車"][0]["rawStopId"], "TPE-STOP-202")
+
+    def test_favorites_v2_rejects_group_mismatch_and_unrelated_fields(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        base_request = {
+            "schema_version": 2,
+            "client_modified_at": "2026-05-21T03:11:00Z",
+            "payload": {
+                "groupKinds": {"路線": "route"},
+                "groups": {
+                    "路線": [
+                        {
+                            "type": "station",
+                            "provider": "tpe",
+                            "stationId": "S1",
+                            "stationName": "站牌",
+                        }
+                    ]
+                },
+            },
+        }
+
+        with self.assertRaises(HTTPException) as mismatch:
+            self._put_document("favorites", base_request)
+        self.assertEqual(mismatch.exception.status_code, 422)
+        self.assertIn("cannot contain", mismatch.exception.detail)
+
+        route_item = {
+            "type": "route",
+            "provider": "tpe",
+            "routeKey": 1,
+            "routeId": "R1",
+            "routeName": "1",
+            "stopId": 99,
+        }
+        base_request["payload"] = {
+            "groupKinds": {"路線": "route"},
+            "groups": {"路線": [route_item]},
+        }
+        with self.assertRaises(HTTPException) as unrelated:
+            self._put_document("favorites", base_request)
+        self.assertEqual(unrelated.exception.status_code, 422)
+        self.assertIn("unsupported keys", unrelated.exception.detail)
+
+    def test_favorites_v2_upgrade_preserves_existing_v1_boarding(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        legacy = {"provider": "tpe", "routeKey": 10, "pathId": 0, "stopId": 20}
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:12:00Z",
+                "payload": {"groups": {"舊收藏": [legacy]}},
+            },
+        )
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:13:00Z",
+                "base_revision": 1,
+                "payload": {
+                    "groupKinds": {"路線": "route"},
+                    "groups": {
+                        "路線": [
+                            {
+                                "type": "route",
+                                "provider": "tpe",
+                                "routeKey": 30,
+                                "routeId": "R30",
+                                "routeName": "30",
+                            }
+                        ]
+                    },
+                },
+            },
+        )
+
+        document = result["document"]
+        self.assertEqual(document["schema_version"], 2)  # type: ignore[index]
+        payload = document["payload"]  # type: ignore[index]
+        self.assertEqual(payload["groupKinds"]["舊收藏"], "boarding")
+        self.assertEqual(payload["groups"]["舊收藏"][0], {"type": "boarding", **legacy})
+        self.assertEqual(payload["groupKinds"]["路線"], "route")
+
+    def test_matching_v1_write_only_replaces_boarding_projection_of_v2(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:14:00Z",
+                "payload": {
+                    "groupKinds": {"通勤": "mixed", "空路線": "route"},
+                    "groups": {
+                        "通勤": [
+                            {
+                                "type": "station",
+                                "provider": "tpe",
+                                "stationId": "S1",
+                                "stationName": "站牌",
+                            },
+                            {
+                                "type": "boarding",
+                                "provider": "tpe",
+                                "routeKey": 1,
+                                "pathId": 0,
+                                "stopId": 2,
+                            },
+                        ],
+                        "空路線": [],
+                    },
+                },
+            },
+        )
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:15:00Z",
+                "base_revision": 1,
+                "payload": {"groups": {"通勤": []}},
+            },
+        )
+
+        document = result["document"]
+        self.assertEqual(document["schema_version"], 2)  # type: ignore[index]
+        payload = document["payload"]  # type: ignore[index]
+        self.assertEqual([item["type"] for item in payload["groups"]["通勤"]], ["station"])
+        self.assertEqual(payload["groupKinds"]["通勤"], "mixed")
+        self.assertEqual(payload["groupKinds"]["空路線"], "route")
+        self.assertEqual(payload["groups"]["空路線"], [])
+
+    def test_v1_client_wins_preserves_v2_items_and_coerces_typed_group_to_mixed(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:16:00Z",
+                "payload": {
+                    "groupKinds": {"站牌": "station"},
+                    "groups": {
+                        "站牌": [
+                            {
+                                "type": "station",
+                                "provider": "tpe",
+                                "stationId": "S1",
+                                "stationName": "站牌",
+                            }
+                        ]
+                    },
+                },
+            },
+        )
+        boarding = {"provider": "tpe", "routeKey": 3, "pathId": 0, "stopId": 4}
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:17:00Z",
+                "base_revision": 999,
+                "conflict_policy": "client_wins",
+                "payload": {"groups": {"站牌": [boarding]}},
+            },
+        )
+
+        payload = result["document"]["payload"]  # type: ignore[index]
+        self.assertEqual(payload["groupKinds"]["站牌"], "mixed")
+        self.assertEqual(
+            [item["type"] for item in payload["groups"]["站牌"]],
+            ["station", "boarding"],
+        )
+
+    def test_matching_v1_projection_preserves_hidden_item_positions(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        station = {
+            "type": "station",
+            "provider": "tpe",
+            "stationId": "S1",
+            "stationName": "站牌",
+        }
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:17:10Z",
+                "payload": {
+                    "groupKinds": {"通勤": "mixed"},
+                    "groups": {
+                        "通勤": [
+                            {
+                                "type": "boarding",
+                                "provider": "tpe",
+                                "routeKey": 1,
+                                "pathId": 0,
+                                "stopId": 1,
+                            },
+                            station,
+                            {
+                                "type": "boarding",
+                                "provider": "tpe",
+                                "routeKey": 2,
+                                "pathId": 0,
+                                "stopId": 2,
+                            },
+                        ]
+                    },
+                },
+            },
+        )
+        incoming = [
+            {"provider": "tpe", "routeKey": 3, "pathId": 0, "stopId": 3},
+            {"provider": "tpe", "routeKey": 4, "pathId": 0, "stopId": 4},
+        ]
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:17:20Z",
+                "base_revision": 1,
+                "payload": {"groups": {"通勤": incoming}},
+            },
+        )
+
+        items = result["document"]["payload"]["groups"]["通勤"]  # type: ignore[index]
+        self.assertEqual([item["type"] for item in items], ["boarding", "station", "boarding"])
+        self.assertEqual(items[0], {"type": "boarding", **incoming[0]})
+        self.assertEqual(items[1], station)
+        self.assertEqual(items[2], {"type": "boarding", **incoming[1]})
+
+    def test_stale_v1_merge_cannot_delete_v2_data(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        boarding = {
+            "type": "boarding",
+            "provider": "tpe",
+            "routeKey": 5,
+            "pathId": 0,
+            "stopId": 6,
+        }
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:18:00Z",
+                "payload": {
+                    "groupKinds": {"綜合": "mixed"},
+                    "groups": {
+                        "綜合": [
+                            {
+                                "type": "route",
+                                "provider": "tpe",
+                                "routeKey": 7,
+                                "routeId": "R7",
+                                "routeName": "7",
+                            },
+                            boarding,
+                        ]
+                    },
+                },
+            },
+        )
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:19:00Z",
+                "base_revision": 1,
+                "payload": {
+                    "groupKinds": {"綜合": "mixed", "空站牌": "station"},
+                    "groups": {"綜合": [boarding], "空站牌": []},
+                },
+            },
+        )
+        legacy_new = {"provider": "tpe", "routeKey": 8, "pathId": 1, "stopId": 9}
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 1,
+                "client_modified_at": "2026-05-21T03:20:00Z",
+                "base_revision": 1,
+                "conflict_policy": "merge",
+                "payload": {"groups": {"綜合": [legacy_new]}},
+            },
+        )
+
+        payload = result["document"]["payload"]  # type: ignore[index]
+        types = [item["type"] for item in payload["groups"]["綜合"]]
+        self.assertEqual(types, ["boarding", "boarding"])
+        self.assertEqual(payload["groupKinds"]["綜合"], "mixed")
+        self.assertEqual(payload["groupKinds"]["空站牌"], "station")
+
+    def test_v2_merge_same_group_with_different_kinds_becomes_mixed(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+        route = {
+            "type": "route",
+            "provider": "tpe",
+            "routeKey": 11,
+            "routeId": "R11",
+            "routeName": "11",
+        }
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:21:00Z",
+                "payload": {
+                    "groupKinds": {"同名": "route"},
+                    "groups": {"同名": [route]},
+                },
+            },
+        )
+        self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:22:00Z",
+                "base_revision": 1,
+                "payload": {
+                    "groupKinds": {"同名": "route", "另一組": "route"},
+                    "groups": {"同名": [route], "另一組": []},
+                },
+            },
+        )
+        station = {
+            "type": "station",
+            "provider": "tpe",
+            "stationId": "S12",
+            "stationName": "12站",
+        }
+
+        _, result = self._put_document(
+            "favorites",
+            {
+                "schema_version": 2,
+                "client_modified_at": "2026-05-21T03:23:00Z",
+                "base_revision": 1,
+                "conflict_policy": "merge",
+                "payload": {
+                    "groupKinds": {"同名": "station"},
+                    "groups": {"同名": [station]},
+                },
+            },
+        )
+
+        payload = result["document"]["payload"]  # type: ignore[index]
+        self.assertEqual(payload["groupKinds"]["同名"], "mixed")
+        self.assertEqual(
+            [item["type"] for item in payload["groups"]["同名"]],
+            ["route", "station"],
+        )
+        self.assertEqual(payload["groupKinds"]["另一組"], "route")
+
+    def test_favorites_rejects_unknown_schema_duplicate_identity_and_cross_type_limit(self) -> None:
+        account_id = self._create_account()
+        self._set_principal(account_id)
+
+        with self.assertRaises(HTTPException) as unknown:
+            self._put_document(
+                "favorites",
+                {
+                    "schema_version": 3,
+                    "client_modified_at": "2026-05-21T03:24:00Z",
+                    "payload": {"groups": {}},
+                },
+            )
+        self.assertEqual(unknown.exception.status_code, 422)
+
+        duplicate_routes = [
+            {
+                "type": "route",
+                "provider": "tpe",
+                "routeKey": route_key,
+                "routeId": "SAME",
+                "routeName": "同一路線",
+            }
+            for route_key in (1, 2)
+        ]
+        with self.assertRaises(HTTPException) as duplicate:
+            self._put_document(
+                "favorites",
+                {
+                    "schema_version": 2,
+                    "client_modified_at": "2026-05-21T03:25:00Z",
+                    "payload": {
+                        "groupKinds": {"路線": "route"},
+                        "groups": {"路線": duplicate_routes},
+                    },
+                },
+            )
+        self.assertEqual(duplicate.exception.status_code, 422)
+        self.assertIn("duplicate favorites", duplicate.exception.detail)
+
+        routes = [
+            {
+                "type": "route",
+                "provider": "tpe",
+                "routeKey": index + 1,
+                "routeId": f"R{index}",
+                "routeName": str(index),
+            }
+            for index in range(9)
+        ]
+        stations = [
+            {
+                "type": "station",
+                "provider": "tpe",
+                "stationId": f"S{index}",
+                "stationName": str(index),
+            }
+            for index in range(9)
+        ]
+        boardings = [
+            {
+                "type": "boarding",
+                "provider": "tpe",
+                "routeKey": index + 100,
+                "pathId": 0,
+                "stopId": index + 200,
+            }
+            for index in range(8)
+        ]
+        with self.assertRaises(HTTPException) as limit:
+            self._put_document(
+                "favorites",
+                {
+                    "schema_version": 2,
+                    "client_modified_at": "2026-05-21T03:26:00Z",
+                    "payload": {
+                        "groupKinds": {"全部": "mixed"},
+                        "groups": {"全部": routes + stations + boardings},
+                    },
+                },
+            )
+        self.assertEqual(limit.exception.status_code, 422)
+        self.assertIn("maximum of 25 items", limit.exception.detail)
+
     def test_request_size_limit_is_enforced(self) -> None:
         account_id = self._create_account()
         self._set_principal(account_id)

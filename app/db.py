@@ -54,6 +54,40 @@ CREATE INDEX IF NOT EXISTS idx_stops_routeid ON stops(routeid);
 CREATE INDEX IF NOT EXISTS idx_stops_stopid ON stops(stopid);
 CREATE INDEX IF NOT EXISTS idx_path_points_routeid ON path_points(routeid);
 
+-- Physical bus stations are authority-scoped. A station contains one or more
+-- stable TDX StopUID/StopID sides, while the existing stops table remains
+-- route/path scoped for ETA lookup and offline compatibility.
+CREATE TABLE IF NOT EXISTS stations (
+    city_code   TEXT NOT NULL,
+    station_id  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    name_en     TEXT,
+    lat         REAL NOT NULL,
+    lon         REAL NOT NULL,
+    PRIMARY KEY (city_code, station_id)
+);
+
+CREATE TABLE IF NOT EXISTS station_stops (
+    city_code    TEXT NOT NULL,
+    station_id   TEXT NOT NULL,
+    stop_uid     TEXT NOT NULL,
+    stop_id      TEXT NOT NULL,
+    side_id      TEXT NOT NULL,
+    side_order   INTEGER NOT NULL,
+    side_label   TEXT NOT NULL,
+    direction    TEXT,
+    lat          REAL NOT NULL,
+    lon          REAL NOT NULL,
+    PRIMARY KEY (city_code, station_id, side_id),
+    FOREIGN KEY (city_code, station_id)
+        REFERENCES stations(city_code, station_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_station_stops_raw_stop
+    ON station_stops(city_code, stop_id);
+CREATE INDEX IF NOT EXISTS idx_station_stops_uid
+    ON station_stops(city_code, stop_uid);
+
 CREATE TABLE IF NOT EXISTS operators (
     operator_id TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -1123,6 +1157,8 @@ MAIN_VERSION_TABLES = (
     "operators",
     "route_operators",
     "route_schedules",
+    "stations",
+    "station_stops",
 )
 DOWNLOAD_VERSION_TABLES = ("routes", "paths")
 CITY_VERSION_TABLES = ("stops",)

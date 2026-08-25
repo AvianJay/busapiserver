@@ -139,7 +139,14 @@ class MigrateFavoritesTests(unittest.TestCase):
             "stopName": "金青中心",
         }
 
-    def _write_document(self, account_id: int, payload: dict, *, revision: int = 3) -> None:
+    def _write_document(
+        self,
+        account_id: int,
+        payload: dict,
+        *,
+        revision: int = 3,
+        schema_version: int = 1,
+    ) -> None:
         payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with get_connection(self.settings.app_db_path) as connection:
             with connection:
@@ -149,10 +156,11 @@ class MigrateFavoritesTests(unittest.TestCase):
                         (account_id, namespace, schema_version, payload_json,
                          payload_size_bytes, content_hash, revision,
                          created_at, updated_at, last_synced_at, last_client_modified_at)
-                    VALUES (?, 'favorites', 1, ?, ?, 'stale-hash', ?, 1000, 1000, 1000, NULL)
+                    VALUES (?, 'favorites', ?, ?, ?, 'stale-hash', ?, 1000, 1000, 1000, NULL)
                     """,
                     (
                         account_id,
+                        schema_version,
                         payload_json,
                         len(payload_json.encode("utf-8")),
                         revision,
@@ -163,13 +171,15 @@ class MigrateFavoritesTests(unittest.TestCase):
         with get_connection(self.settings.app_db_path) as connection:
             row = connection.execute(
                 """
-                SELECT payload_json, payload_size_bytes, content_hash, revision, updated_at
+                SELECT schema_version, payload_json, payload_size_bytes,
+                       content_hash, revision, updated_at
                 FROM account_sync_documents
                 WHERE account_id = ? AND namespace = 'favorites'
                 """,
                 (account_id,),
             ).fetchone()
         return {
+            "schema_version": row["schema_version"],
             "payload": json.loads(row["payload_json"]),
             "payload_size_bytes": row["payload_size_bytes"],
             "content_hash": row["content_hash"],
@@ -268,6 +278,46 @@ class MigrateFavoritesTests(unittest.TestCase):
         self.assertEqual(stats["dropped"], 1)
         document = self._read_document(account_id)
         self.assertEqual(len(document["payload"]["groups"]["Home"]), 1)
+
+    def test_schema_v2_is_type_aware_and_preserves_group_kinds(self) -> None:
+        account_id = self._create_account()
+        route = {
+            "type": "route",
+            "provider": "inter",
+            "routeKey": route_key_for_routeid(ABSORBED),
+            "routeId": ABSORBED,
+            "routeName": "1815",
+        }
+        boarding = {
+            "type": "boarding",
+            **self._favorite(ABSORBED, path_id=1, stop_id=269906),
+        }
+        station = {
+            "type": "station",
+            "provider": "inter",
+            "stationId": ABSORBED,
+            "stationName": "金青中心",
+        }
+        payload = {
+            "groupKinds": {"Mixed": "mixed"},
+            "groups": {"Mixed": [route, station, boarding]},
+        }
+        self._write_document(account_id, payload, schema_version=2)
+
+        stats = migrate(self.settings)
+
+        self.assertEqual(stats["rewritten"], 2)
+        self.assertEqual(stats["dropped"], 0)
+        document = self._read_document(account_id)
+        self.assertEqual(document["schema_version"], 2)
+        self.assertEqual(document["payload"]["groupKinds"], {"Mixed": "mixed"})
+        items = document["payload"]["groups"]["Mixed"]
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["routeId"], CANONICAL)
+        self.assertEqual(items[0]["routeKey"], route_key_for_routeid(CANONICAL))
+        self.assertEqual(items[1], station)
+        self.assertEqual(items[2]["routeId"], CANONICAL)
+        self.assertEqual(items[2]["routeKey"], route_key_for_routeid(CANONICAL))
 
     def test_missing_alias_table_data_is_a_no_op(self) -> None:
         with get_connection(self.settings.db_path) as connection:

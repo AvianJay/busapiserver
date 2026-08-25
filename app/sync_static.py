@@ -86,6 +86,116 @@ def _name_parts(value: dict | None) -> tuple[str | None, str | None]:
     return zh, en
 
 
+def _side_label(index: int) -> str:
+    """Return stable spreadsheet-style labels: A..Z, AA..AZ, and so on."""
+    value = index + 1
+    label = ""
+    while value > 0:
+        value, remainder = divmod(value - 1, 26)
+        label = chr(ord("A") + remainder) + label
+    return label
+
+
+def _position_parts(value: object, fallback: object = None) -> tuple[float, float]:
+    position = value if isinstance(value, dict) else fallback
+    if not isinstance(position, dict):
+        return 0.0, 0.0
+    try:
+        lat = float(position.get("PositionLat") or 0.0)
+        lon = float(position.get("PositionLon") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    return lat, lon
+
+
+def _replace_bus_stations(
+    connection,
+    city_code: str,
+    station_items: list[dict],
+) -> None:
+    """Replace one authority's physical stations with deterministic sides."""
+    connection.execute("DELETE FROM station_stops WHERE city_code = ?", (city_code,))
+    connection.execute("DELETE FROM stations WHERE city_code = ?", (city_code,))
+
+    ordered_stations = sorted(
+        (item for item in station_items if isinstance(item, dict)),
+        key=lambda item: str(item.get("StationUID") or item.get("StationID") or ""),
+    )
+    for station in ordered_stations:
+        station_id = str(station.get("StationUID") or station.get("StationID") or "").strip()
+        if not station_id:
+            continue
+        station_name, station_name_en = _name_parts(station.get("StationName"))
+        if not station_name:
+            continue
+        station_lat, station_lon = _position_parts(station.get("StationPosition"))
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO stations
+                (city_code, station_id, name, name_en, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                city_code,
+                station_id,
+                station_name,
+                station_name_en,
+                station_lat,
+                station_lon,
+            ),
+        )
+
+        raw_sides = station.get("Stops")
+        if not isinstance(raw_sides, list):
+            raw_sides = []
+        stable_sides: list[tuple[str, str, dict]] = []
+        for raw_side in raw_sides:
+            if not isinstance(raw_side, dict):
+                continue
+            stop_uid = str(raw_side.get("StopUID") or raw_side.get("StopID") or "").strip()
+            stop_id = str(raw_side.get("StopID") or raw_side.get("StopUID") or "").strip()
+            if stop_uid and stop_id:
+                stable_sides.append((stop_uid, stop_id, raw_side))
+        stable_sides.sort(key=lambda entry: (entry[0], entry[1]))
+
+        seen_side_ids: set[str] = set()
+        for _, (stop_uid, stop_id, raw_side) in enumerate(stable_sides):
+            side_id = stop_uid
+            if side_id in seen_side_ids:
+                continue
+            seen_side_ids.add(side_id)
+            side_order = len(seen_side_ids) - 1
+            side_name, _ = _name_parts(raw_side.get("StopName"))
+            bearing = raw_side.get("Bearing")
+            direction = side_name if side_name and side_name != station_name else None
+            if direction is None and bearing not in (None, ""):
+                direction = str(bearing).strip() or None
+            side_lat, side_lon = _position_parts(
+                raw_side.get("StopPosition"),
+                station.get("StationPosition"),
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO station_stops
+                    (city_code, station_id, stop_uid, stop_id, side_id,
+                     side_order, side_label, direction, lat, lon)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    city_code,
+                    station_id,
+                    stop_uid,
+                    stop_id,
+                    side_id,
+                    side_order,
+                    _side_label(side_order),
+                    direction,
+                    side_lat,
+                    side_lon,
+                ),
+            )
+
+
 def _name_text(value: dict | None) -> str | None:
     zh, en = _name_parts(value)
     return zh or en
@@ -987,6 +1097,56 @@ def _copy_main_routes_by_prefix(source_connection, target_connection, prefix: st
             ],
         )
 
+    station_rows = source_connection.execute(
+        """
+        SELECT city_code, station_id, name, name_en, lat, lon
+        FROM stations
+        WHERE city_code = ?
+        ORDER BY station_id
+        """,
+        (prefix,),
+    ).fetchall()
+    if station_rows:
+        target_connection.executemany(
+            """
+            INSERT OR REPLACE INTO stations
+                (city_code, station_id, name, name_en, lat, lon)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["city_code"],
+                    row["station_id"],
+                    row["name"],
+                    row["name_en"],
+                    row["lat"],
+                    row["lon"],
+                )
+                for row in station_rows
+            ],
+        )
+
+        station_stop_rows = source_connection.execute(
+            """
+            SELECT city_code, station_id, stop_uid, stop_id, side_id,
+                   side_order, side_label, direction, lat, lon
+            FROM station_stops
+            WHERE city_code = ?
+            ORDER BY station_id, side_order
+            """,
+            (prefix,),
+        ).fetchall()
+        if station_stop_rows:
+            target_connection.executemany(
+                """
+                INSERT OR REPLACE INTO station_stops
+                    (city_code, station_id, stop_uid, stop_id, side_id,
+                     side_order, side_label, direction, lat, lon)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [tuple(row) for row in station_stop_rows],
+            )
+
     return len(route_rows)
 
 
@@ -1358,6 +1518,10 @@ def sync_static(
                     source_connection,
                     _resource_key(city, "shapes"),
                 )
+                stations_state = None if source_connection is None else load_tdx_fetch_state(
+                    source_connection,
+                    _resource_key(city, "stations"),
+                )
 
                 routes_response = client.fetch_paginated_items_conditional(
                     f"/v2/Bus/Route/City/{city}",
@@ -1377,16 +1541,24 @@ def sync_static(
                     if force or shapes_state is None
                     else shapes_state.get("last_modified"),
                 )
+                stations_response = client.fetch_paginated_items_conditional(
+                    f"/v2/Bus/Station/City/{city}",
+                    if_modified_since=None
+                    if force or stations_state is None
+                    else stations_state.get("last_modified"),
+                )
 
                 checked_at = int(time.time())
                 _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
                 _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
                 _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
+                _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
 
                 if (
                     routes_response.not_modified
                     and stops_response.not_modified
                     and shapes_response.not_modified
+                    and stations_response.not_modified
                 ):
                     prefix = CITY_NAME_TO_PREFIX.get(city)
                     copied_routes = 0
@@ -1426,10 +1598,15 @@ def sync_static(
                         f"/v2/Bus/Shape/City/{city}",
                         if_modified_since=None,
                     )
+                    stations_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/Station/City/{city}",
+                        if_modified_since=None,
+                    )
                     checked_at = int(time.time())
                     _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
                     _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
                     _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
+                    _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
 
                 if routes_response.not_modified:
                     routes_response = client.fetch_paginated_items_conditional(
@@ -1452,9 +1629,17 @@ def sync_static(
                     )
                     _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
 
+                if stations_response.not_modified:
+                    stations_response = client.fetch_paginated_items_conditional(
+                        f"/v2/Bus/Station/City/{city}",
+                        if_modified_since=None,
+                    )
+                    _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
+
                 routes = routes_response.payload or []
                 stop_of_route_items = stops_response.payload or []
                 shapes = shapes_response.payload or []
+                stations = stations_response.payload or []
                 static_routes = _build_static_routes(
                     routes,
                     stop_of_route_items,
@@ -1480,6 +1665,7 @@ def sync_static(
                         delete_main_routes_by_prefix(connection, prefix)
                         for route in static_routes.values():
                             _replace_main_route(connection, route)
+                        _replace_bus_stations(connection, prefix, stations)
 
                 # --- Sync Operators ---
                 operators_response = client.fetch_paginated_items_conditional(
@@ -1543,15 +1729,17 @@ def sync_static(
 
                 LOGGER.info(
                     "city=%s routes=%s stop_of_route=%s shapes=%s city_db=%s "
-                    "status(routes/stops/shapes)=%s/%s/%s",
+                    "stations=%s status(routes/stops/shapes/stations)=%s/%s/%s/%s",
                     city,
                     len(static_routes),
                     len(stop_of_route_items),
                     len(shapes),
                     city_db_path.name,
+                    len(stations),
                     routes_response.status_code,
                     stops_response.status_code,
                     shapes_response.status_code,
+                    stations_response.status_code,
                 )
 
             inter_name = INTERCITY_CITY_NAME
@@ -1568,6 +1756,10 @@ def sync_static(
             inter_shapes_state = None if source_connection is None else load_tdx_fetch_state(
                 source_connection,
                 _resource_key(inter_name, "shapes"),
+            )
+            inter_stations_state = None if source_connection is None else load_tdx_fetch_state(
+                source_connection,
+                _resource_key(inter_name, "stations"),
             )
 
             inter_routes_response = client.fetch_paginated_items_conditional(
@@ -1588,16 +1780,24 @@ def sync_static(
                 if force or inter_shapes_state is None
                 else inter_shapes_state.get("last_modified"),
             )
+            inter_stations_response = client.fetch_paginated_items_conditional(
+                "/v2/Bus/Station/InterCity",
+                if_modified_since=None
+                if force or inter_stations_state is None
+                else inter_stations_state.get("last_modified"),
+            )
 
             checked_at = int(time.time())
             _persist_fetch_state(connection, inter_name, "routes", inter_routes_response, checked_at, inter_routes_state)
             _persist_fetch_state(connection, inter_name, "stop_of_route", inter_stops_response, checked_at, inter_stops_state)
             _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
+            _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
 
             if (
                 inter_routes_response.not_modified
                 and inter_stops_response.not_modified
                 and inter_shapes_response.not_modified
+                and inter_stations_response.not_modified
             ):
                 copied_routes = 0
                 if source_connection is not None:
@@ -1625,15 +1825,21 @@ def sync_static(
                         "/v2/Bus/Shape/InterCity",
                         if_modified_since=None,
                     )
+                    inter_stations_response = client.fetch_paginated_items_conditional(
+                        "/v2/Bus/Station/InterCity",
+                        if_modified_since=None,
+                    )
                     checked_at = int(time.time())
                     _persist_fetch_state(connection, inter_name, "routes", inter_routes_response, checked_at, inter_routes_state)
                     _persist_fetch_state(connection, inter_name, "stop_of_route", inter_stops_response, checked_at, inter_stops_state)
                     _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
+                    _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
 
             if not (
                 inter_routes_response.not_modified
                 and inter_stops_response.not_modified
                 and inter_shapes_response.not_modified
+                and inter_stations_response.not_modified
             ):
                 if inter_routes_response.not_modified:
                     inter_routes_response = client.fetch_paginated_items_conditional(
@@ -1656,9 +1862,17 @@ def sync_static(
                     )
                     _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
 
+                if inter_stations_response.not_modified:
+                    inter_stations_response = client.fetch_paginated_items_conditional(
+                        "/v2/Bus/Station/InterCity",
+                        if_modified_since=None,
+                    )
+                    _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
+
                 inter_routes_raw = inter_routes_response.payload or []
                 inter_stop_of_route_items = inter_stops_response.payload or []
                 inter_shapes_raw = inter_shapes_response.payload or []
+                inter_stations_raw = inter_stations_response.payload or []
                 # The intercity build runs in TDX's own namespace, so the
                 # remembered canonicals have to have their INT prefix stripped
                 # before they can be matched.
@@ -1691,6 +1905,11 @@ def sync_static(
                     delete_main_routes_by_prefix(connection, INTERCITY_PREFIX)
                     for route in merged_inter_routes.values():
                         _replace_main_route(connection, route)
+                    _replace_bus_stations(
+                        connection,
+                        INTERCITY_PREFIX,
+                        inter_stations_raw,
+                    )
                     connection.execute(
                         "DELETE FROM route_operators WHERE routeid LIKE ?",
                         (f"{INTERCITY_PREFIX}%",),
@@ -1728,13 +1947,16 @@ def sync_static(
                     )
 
                 LOGGER.info(
-                    "intercity merged_routes=%s stop_of_route=%s shapes=%s status(routes/stops/shapes)=%s/%s/%s",
+                    "intercity merged_routes=%s stop_of_route=%s shapes=%s stations=%s "
+                    "status(routes/stops/shapes/stations)=%s/%s/%s/%s",
                     len(merged_inter_routes),
                     len(inter_stop_of_route_items),
                     len(inter_shapes_raw),
+                    len(inter_stations_raw),
                     inter_routes_response.status_code,
                     inter_stops_response.status_code,
                     inter_shapes_response.status_code,
+                    inter_stations_response.status_code,
                 )
 
             if source_connection is not None:

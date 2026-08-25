@@ -570,6 +570,197 @@ _STOP_PASSBY_MAX_ROUTES = 200
 _stop_passby_id_pattern = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+@router.get("/api/v1/stations/resolve")
+def resolve_bus_station(
+    request: Request,
+    city: str = Query(..., min_length=1, max_length=8),
+    stopid: str = Query(..., min_length=1, max_length=128),
+) -> dict:
+    """Resolve an authority-scoped raw StopID/StopUID to a physical station."""
+    city_code = _normalize_station_city(city)
+    normalized_stopid = stopid.strip()
+    if not _stop_passby_id_pattern.fullmatch(normalized_stopid):
+        raise HTTPException(status_code=400, detail=f"Invalid stop ID: {stopid!r}")
+
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT station_id
+            FROM station_stops
+            WHERE city_code = ? AND (stop_id = ? OR stop_uid = ?)
+            ORDER BY station_id
+            LIMIT 1
+            """,
+            (city_code, normalized_stopid, normalized_stopid),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Stop {stopid} was not resolved to a station.",
+        )
+    return _station_passby_payload(
+        request,
+        city_code=city_code,
+        station_id=row["station_id"],
+    )
+
+
+@router.get("/api/v1/stations/{station_id}/passby")
+def get_station_passby(
+    station_id: str,
+    request: Request,
+    city: str = Query(..., min_length=1, max_length=8),
+) -> dict:
+    """Return every stable side of a physical station and its passing routes."""
+    normalized_station_id = station_id.strip()
+    if not normalized_station_id or not _stop_passby_id_pattern.fullmatch(
+        normalized_station_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid station ID: {station_id!r}",
+        )
+    return _station_passby_payload(
+        request,
+        city_code=_normalize_station_city(city),
+        station_id=normalized_station_id,
+    )
+
+
+def _normalize_station_city(city: str) -> str:
+    city_code = city.strip().upper()
+    if city_code not in CITY_PREFIX_TO_NAME:
+        raise HTTPException(status_code=400, detail=f"Unknown city prefix: {city!r}")
+    return city_code
+
+
+def _station_passby_payload(
+    request: Request,
+    *,
+    city_code: str,
+    station_id: str,
+) -> dict:
+    settings = request.app.state.settings
+    with get_connection(settings.db_path) as connection:
+        station = connection.execute(
+            """
+            SELECT station_id, name, name_en, lat, lon
+            FROM stations
+            WHERE city_code = ? AND station_id = ?
+            """,
+            (city_code, station_id),
+        ).fetchone()
+        if station is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Station {station_id} was not found.",
+            )
+
+        side_rows = connection.execute(
+            """
+            SELECT side_id, side_order, side_label, stop_uid, stop_id,
+                   direction, lat, lon
+            FROM station_stops
+            WHERE city_code = ? AND station_id = ?
+            ORDER BY side_order, side_id
+            """,
+            (city_code, station_id),
+        ).fetchall()
+        route_rows = connection.execute(
+            """
+            SELECT
+                ss.side_id AS side_id,
+                s.routeid AS routeid,
+                s.pathid AS pathid,
+                s.seq AS seq,
+                s.stopid AS stopid,
+                r.name AS route_name,
+                r.name_en AS route_name_en,
+                COALESCE(p.name, '') AS path_name,
+                COALESCE(p.name_en, '') AS path_name_en
+            FROM station_stops ss
+            JOIN stops s
+              ON s.stopid = ss.stop_id
+             AND s.routeid LIKE ?
+            JOIN routes r ON r.routeid = s.routeid
+            LEFT JOIN paths p
+              ON p.routeid = s.routeid AND p.pathid = s.pathid
+            WHERE ss.city_code = ? AND ss.station_id = ?
+            ORDER BY ss.side_order, s.routeid, s.pathid, s.seq
+            """,
+            (f"{city_code}%", city_code, station_id),
+        ).fetchall()
+
+    ordered_routeids: list[str] = []
+    seen_routeids: set[str] = set()
+    for row in route_rows:
+        routeid = row["routeid"]
+        if routeid not in seen_routeids:
+            seen_routeids.add(routeid)
+            ordered_routeids.append(routeid)
+    ordered_routeids = ordered_routeids[:_STOP_PASSBY_MAX_ROUTES]
+    allowed_routeids = set(ordered_routeids)
+
+    service = request.app.state.realtime_service
+    try:
+        snapshots = service.get_batch_snapshots(ordered_routeids)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="TDX upstream request failed.") from exc
+
+    routes_by_side: dict[str, list[dict]] = {
+        row["side_id"]: [] for row in side_rows
+    }
+    for row in route_rows:
+        routeid = row["routeid"]
+        if routeid not in allowed_routeids:
+            continue
+        pathid = int(row["pathid"])
+        stopid = row["stopid"]
+        stop_bucket = _find_snapshot_stop(snapshots.get(routeid), pathid, stopid)
+        routes_by_side[row["side_id"]].append(
+            {
+                "routeid": routeid,
+                "route_name": row["route_name"],
+                "route_name_en": row["route_name_en"],
+                "pathid": pathid,
+                "path_name": row["path_name"],
+                "path_name_en": row["path_name_en"],
+                "seq": int(row["seq"]),
+                "stopid": stopid,
+                "eta": (stop_bucket or {}).get("eta"),
+                "message": (stop_bucket or {}).get("message", ""),
+                "updated_at": (stop_bucket or {}).get("updated_at"),
+                "buses": (stop_bucket or {}).get("buses", []),
+                "etas": (stop_bucket or {}).get("etas", []),
+            }
+        )
+
+    return {
+        "city": city_code,
+        "station_id": station["station_id"],
+        "station_name": station["name"],
+        "station_name_en": station["name_en"],
+        "lat": float(station["lat"]),
+        "lon": float(station["lon"]),
+        "sides": [
+            {
+                "side_id": row["side_id"],
+                "label": row["side_label"],
+                "direction": row["direction"],
+                "stop_uid": row["stop_uid"],
+                "stopid": row["stop_id"],
+                "lat": float(row["lat"]),
+                "lon": float(row["lon"]),
+                "routes": routes_by_side.get(row["side_id"], []),
+            }
+            for row in side_rows
+        ],
+    }
+
+
 @router.get("/api/v1/stops/{stopid}/passby")
 def get_stop_passby(
     stopid: str,

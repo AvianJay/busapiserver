@@ -86,7 +86,8 @@ def _rewrite_favorites_payload(
                 new_items.append(item)
                 continue
 
-            routeid = item.get("routeId")
+            item_type = item.get("type", "boarding")
+            routeid = item.get("routeId") if item_type in {"route", "boarding"} else None
             canonical = canonical_for.get(routeid) if isinstance(routeid, str) else None
             if canonical is not None and canonical != routeid:
                 item = dict(item)
@@ -98,12 +99,7 @@ def _rewrite_favorites_payload(
             # identity, because merged members have distinct directions and
             # pathId == direction. Guard anyway rather than write a document the
             # sync validator would reject.
-            identity = (
-                item.get("provider"),
-                item.get("routeKey"),
-                item.get("pathId"),
-                item.get("stopId"),
-            )
+            identity = _favorite_identity(item)
             if identity in seen:
                 dropped += 1
                 LOGGER.warning(
@@ -118,6 +114,21 @@ def _rewrite_favorites_payload(
         new_groups[group_name] = new_items
 
     return {**payload, "groups": new_groups}, rewritten, dropped
+
+
+def _favorite_identity(item: dict[str, Any]) -> tuple[Any, ...]:
+    item_type = item.get("type", "boarding")
+    if item_type == "route":
+        return ("route", item.get("provider"), item.get("routeId"))
+    if item_type == "station":
+        return ("station", item.get("provider"), item.get("stationId"))
+    return (
+        "boarding",
+        item.get("provider"),
+        item.get("routeKey"),
+        item.get("pathId"),
+        item.get("stopId"),
+    )
 
 
 def migrate(settings: Settings, *, dry_run: bool = False) -> dict[str, int]:
@@ -216,7 +227,11 @@ def _collect_routeids(payload: dict[str, Any]) -> set[str]:
         if not isinstance(items, list):
             continue
         for item in items:
-            if isinstance(item, dict) and isinstance(item.get("routeId"), str):
+            if (
+                isinstance(item, dict)
+                and item.get("type", "boarding") in {"route", "boarding"}
+                and isinstance(item.get("routeId"), str)
+            ):
                 routeids.add(item["routeId"])
     return routeids
 

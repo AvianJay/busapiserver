@@ -119,7 +119,7 @@ class HashSerializationTests(DatabaseVersionTestCase):
         self._seed_route()
         self.assertEqual(
             hash_tables(self.db_path, MAIN_VERSION_TABLES),
-            "08d9567908c067cd6eba00c5eea6e6e6495f2e13ec7ad483b13b8d0d0bbbdfc4",
+            "85a17352d71acb17de2b4880e54aa32ebcb4f803896b368ebff094f1223ea7dc",
         )
 
     def test_batched_hash_matches_row_by_row_reference(self) -> None:
@@ -541,6 +541,8 @@ class CityVersionTableTests(unittest.TestCase):
                 "operators",
                 "route_operators",
                 "route_schedules",
+                "stations",
+                "station_stops",
             ),
         )
         self.assertEqual(DOWNLOAD_VERSION_TABLES, ("routes", "paths"))
