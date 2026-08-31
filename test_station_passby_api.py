@@ -12,7 +12,7 @@ import requests
 from app.api.routes import router
 from app.db import get_connection, init_db
 from app.rate_limit import reset_rate_limit_state
-from app.sync_static import _replace_bus_stations
+from app.sync_static import _copy_main_routes_by_prefix, _replace_bus_stations
 
 
 class _FakeRealtimeService:
@@ -191,6 +191,29 @@ class StationPassbyApiTests(unittest.TestCase):
         self.assertEqual(body["station_name_en"], "City Hall")
         self.assertAlmostEqual(body["lat"], 25.04)
         self.assertEqual(body["sides"][0]["direction"], "市政府（忠孝東路）")
+
+    def test_resolve_still_works_after_a_304_reuse_copy(self) -> None:
+        # The all-304 fast path in sync_static rebuilds the database by copying
+        # the previous one instead of refetching. This asserts the user-visible
+        # end of that: a station favourited before the sync must still resolve
+        # afterwards, rather than the app reporting no whole-station data.
+        target_path = Path(self.temp_dir.name) / "bus.db.tmp"
+        init_db(target_path)
+        with get_connection(self.db_path) as source, get_connection(
+            target_path
+        ) as target:
+            with target:
+                _copy_main_routes_by_prefix(source, target, "TPE")
+        self.client.app.state.settings.db_path = target_path
+
+        response = self.client.get(
+            "/api/v1/stations/resolve?city=TPE&stopid=STOP-B"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["station_id"], "TPE-STATION-1")
+        self.assertEqual([side["label"] for side in body["sides"]], ["A", "B"])
 
     def test_resolve_is_city_scoped_without_name_or_distance_fallback(self) -> None:
         taipei = self.client.get(

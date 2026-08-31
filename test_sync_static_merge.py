@@ -27,6 +27,7 @@ from app.sync_static import (
     _choose_canonical,
     _copy_main_routes_by_prefix,
     _prefix_inter_routes,
+    _replace_bus_stations,
     _replace_main_route,
     _sync_route_schedules,
     _compute_and_store_travel_times,
@@ -470,6 +471,84 @@ class PersistenceTests(unittest.TestCase):
         mapping = {row["subroute_uid"]: row["routeid"] for row in rows}
         self.assertEqual(mapping["THB181502"], "THB181501")
         self.assertEqual(len(mapping), 15)
+
+    def test_copy_main_routes_by_prefix_round_trips_station_rows(self) -> None:
+        # When every TDX resource for a city answers 304, sync_static reuses the
+        # previous database through this copier instead of refetching. Stations
+        # must survive that path: if they do not, /stations/resolve and
+        # /stations/{id}/passby start 404-ing for every unchanged city on the
+        # second sync, and the app can no longer favourite a whole station.
+        static_routes = _build_static_routes(
+            _thb_1815_routes(),
+            _thb_1815_stop_of_route(),
+            [],
+        )
+        self._write(static_routes)
+
+        with get_connection(self.db_path) as source:
+            with source:
+                _replace_bus_stations(
+                    source,
+                    "THB",
+                    [
+                        {
+                            "StationUID": "THB-STATION-1",
+                            "StationName": {"Zh_tw": "台中車站", "En": "Taichung"},
+                            "StationPosition": {
+                                "PositionLat": 24.137,
+                                "PositionLon": 120.685,
+                            },
+                            "Stops": [
+                                {
+                                    "StopUID": "THB-UID-B",
+                                    "StopID": "STOP-B",
+                                    "StopName": {"Zh_tw": "台中車站（建國路）"},
+                                    "StopPosition": {
+                                        "PositionLat": 24.138,
+                                        "PositionLon": 120.686,
+                                    },
+                                },
+                                {
+                                    "StopUID": "THB-UID-A",
+                                    "StopID": "STOP-A",
+                                    "StopName": {"Zh_tw": "台中車站（台灣大道）"},
+                                    "StopPosition": {
+                                        "PositionLat": 24.136,
+                                        "PositionLon": 120.684,
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                )
+
+        target_path = Path(self.temp_dir.name) / "bus.db.tmp"
+        init_db(target_path)
+
+        with get_connection(self.db_path) as source, get_connection(target_path) as target:
+            with target:
+                copied = _copy_main_routes_by_prefix(source, target, "THB")
+            stations = target.execute(
+                "SELECT city_code, station_id, name FROM stations"
+            ).fetchall()
+            sides = target.execute(
+                "SELECT stop_id, stop_uid, side_order, side_label FROM station_stops "
+                "ORDER BY side_order"
+            ).fetchall()
+
+        # The route count contract the 304 reuse path branches on is unchanged.
+        self.assertEqual(copied, 8)
+        self.assertEqual(
+            [(row["city_code"], row["station_id"], row["name"]) for row in stations],
+            [("THB", "THB-STATION-1", "台中車站")],
+        )
+        # Sides keep their stable StopUID-sorted order and generated labels, so
+        # the copied rows resolve identically to the freshly synced ones.
+        self.assertEqual(
+            [(row["stop_id"], row["stop_uid"], row["side_order"]) for row in sides],
+            [("STOP-A", "THB-UID-A", 0), ("STOP-B", "THB-UID-B", 1)],
+        )
+        self.assertEqual([row["side_label"] for row in sides], ["A", "B"])
 
     def test_route_uid_rows_are_written_per_pathid(self) -> None:
         static_routes = _build_static_routes(
