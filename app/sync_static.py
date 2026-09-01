@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import requests
+
 from app.config import (
     CITY_NAME_TO_PREFIX,
     INTERCITY_CITY_NAME,
@@ -106,6 +108,50 @@ def _position_parts(value: object, fallback: object = None) -> tuple[float, floa
     except (TypeError, ValueError):
         return 0.0, 0.0
     return lat, lon
+
+
+def _fetch_bus_stations(
+    client: TDXClient,
+    city: str,
+    *,
+    if_modified_since: str | None,
+) -> TDXJSONResponse | None:
+    """Fetch one authority's Station feed, or None when it publishes none.
+
+    TDX answers 400 for ``/v2/Bus/Station/City/LienchiangCounty`` — not every
+    authority exposes a Station feed at all. Stations only power whole-station
+    lookups, an enrichment layered on top of the routes/stops/shapes the rest of
+    the sync is built from, so a missing feed has to degrade to "this city has
+    no stations". Letting it raise aborts the entire run *and* discards every
+    city already synced into the temp database, because the swap onto bus.db
+    only happens at the very end.
+
+    Only 4xx means "no such feed". 429 and 5xx are transient, are already
+    retried inside the client, and still raise.
+
+    ``city`` may be [INTERCITY_CITY_NAME], which selects the InterCity feed and
+    matches the key its fetch state is stored under.
+    """
+    path = (
+        "/v2/Bus/Station/InterCity"
+        if city == INTERCITY_CITY_NAME
+        else f"/v2/Bus/Station/City/{city}"
+    )
+    try:
+        return client.fetch_paginated_items_conditional(
+            path,
+            if_modified_since=if_modified_since,
+        )
+    except requests.HTTPError as exc:
+        status = None if exc.response is None else exc.response.status_code
+        if status is None or status == 429 or not 400 <= status < 500:
+            raise
+        LOGGER.warning(
+            "city=%s publishes no bus Station feed (HTTP %s); continuing without stations",
+            city,
+            status,
+        )
+        return None
 
 
 def _replace_bus_stations(
@@ -1541,8 +1587,9 @@ def sync_static(
                     if force or shapes_state is None
                     else shapes_state.get("last_modified"),
                 )
-                stations_response = client.fetch_paginated_items_conditional(
-                    f"/v2/Bus/Station/City/{city}",
+                stations_response = _fetch_bus_stations(
+                    client,
+                    city,
                     if_modified_since=None
                     if force or stations_state is None
                     else stations_state.get("last_modified"),
@@ -1552,13 +1599,19 @@ def sync_static(
                 _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
                 _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
                 _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
-                _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
+                # No state for an absent feed: leaving it unrecorded keeps the
+                # next run unconditional, so a city picks stations up for free
+                # if TDX starts publishing them.
+                if stations_response is not None:
+                    _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
 
                 if (
                     routes_response.not_modified
                     and stops_response.not_modified
                     and shapes_response.not_modified
-                    and stations_response.not_modified
+                    # An absent feed must not block the cheap reuse path, or the
+                    # city would refetch everything on every single run.
+                    and (stations_response is None or stations_response.not_modified)
                 ):
                     prefix = CITY_NAME_TO_PREFIX.get(city)
                     copied_routes = 0
@@ -1598,15 +1651,15 @@ def sync_static(
                         f"/v2/Bus/Shape/City/{city}",
                         if_modified_since=None,
                     )
-                    stations_response = client.fetch_paginated_items_conditional(
-                        f"/v2/Bus/Station/City/{city}",
-                        if_modified_since=None,
+                    stations_response = _fetch_bus_stations(
+                        client, city, if_modified_since=None
                     )
                     checked_at = int(time.time())
                     _persist_fetch_state(connection, city, "routes", routes_response, checked_at, routes_state)
                     _persist_fetch_state(connection, city, "stop_of_route", stops_response, checked_at, stops_state)
                     _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
-                    _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
+                    if stations_response is not None:
+                        _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
 
                 if routes_response.not_modified:
                     routes_response = client.fetch_paginated_items_conditional(
@@ -1629,17 +1682,17 @@ def sync_static(
                     )
                     _persist_fetch_state(connection, city, "shapes", shapes_response, checked_at, shapes_state)
 
-                if stations_response.not_modified:
-                    stations_response = client.fetch_paginated_items_conditional(
-                        f"/v2/Bus/Station/City/{city}",
-                        if_modified_since=None,
+                if stations_response is not None and stations_response.not_modified:
+                    stations_response = _fetch_bus_stations(
+                        client, city, if_modified_since=None
                     )
-                    _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
+                    if stations_response is not None:
+                        _persist_fetch_state(connection, city, "stations", stations_response, checked_at, stations_state)
 
                 routes = routes_response.payload or []
                 stop_of_route_items = stops_response.payload or []
                 shapes = shapes_response.payload or []
-                stations = stations_response.payload or []
+                stations = [] if stations_response is None else (stations_response.payload or [])
                 static_routes = _build_static_routes(
                     routes,
                     stop_of_route_items,
@@ -1665,7 +1718,11 @@ def sync_static(
                         delete_main_routes_by_prefix(connection, prefix)
                         for route in static_routes.values():
                             _replace_main_route(connection, route)
-                        _replace_bus_stations(connection, prefix, stations)
+                        # Skip rather than replace with []: an absent feed means
+                        # "unknown", and wiping would turn one bad TDX response
+                        # into a city-wide loss of whole-station lookups.
+                        if stations_response is not None:
+                            _replace_bus_stations(connection, prefix, stations)
 
                 # --- Sync Operators ---
                 operators_response = client.fetch_paginated_items_conditional(
@@ -1739,7 +1796,7 @@ def sync_static(
                     routes_response.status_code,
                     stops_response.status_code,
                     shapes_response.status_code,
-                    stations_response.status_code,
+                    "none" if stations_response is None else stations_response.status_code,
                 )
 
             inter_name = INTERCITY_CITY_NAME
@@ -1780,8 +1837,9 @@ def sync_static(
                 if force or inter_shapes_state is None
                 else inter_shapes_state.get("last_modified"),
             )
-            inter_stations_response = client.fetch_paginated_items_conditional(
-                "/v2/Bus/Station/InterCity",
+            inter_stations_response = _fetch_bus_stations(
+                client,
+                inter_name,
                 if_modified_since=None
                 if force or inter_stations_state is None
                 else inter_stations_state.get("last_modified"),
@@ -1791,13 +1849,17 @@ def sync_static(
             _persist_fetch_state(connection, inter_name, "routes", inter_routes_response, checked_at, inter_routes_state)
             _persist_fetch_state(connection, inter_name, "stop_of_route", inter_stops_response, checked_at, inter_stops_state)
             _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
-            _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
+            if inter_stations_response is not None:
+                _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
 
             if (
                 inter_routes_response.not_modified
                 and inter_stops_response.not_modified
                 and inter_shapes_response.not_modified
-                and inter_stations_response.not_modified
+                and (
+                    inter_stations_response is None
+                    or inter_stations_response.not_modified
+                )
             ):
                 copied_routes = 0
                 if source_connection is not None:
@@ -1825,21 +1887,24 @@ def sync_static(
                         "/v2/Bus/Shape/InterCity",
                         if_modified_since=None,
                     )
-                    inter_stations_response = client.fetch_paginated_items_conditional(
-                        "/v2/Bus/Station/InterCity",
-                        if_modified_since=None,
+                    inter_stations_response = _fetch_bus_stations(
+                        client, inter_name, if_modified_since=None
                     )
                     checked_at = int(time.time())
                     _persist_fetch_state(connection, inter_name, "routes", inter_routes_response, checked_at, inter_routes_state)
                     _persist_fetch_state(connection, inter_name, "stop_of_route", inter_stops_response, checked_at, inter_stops_state)
                     _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
-                    _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
+                    if inter_stations_response is not None:
+                        _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
 
             if not (
                 inter_routes_response.not_modified
                 and inter_stops_response.not_modified
                 and inter_shapes_response.not_modified
-                and inter_stations_response.not_modified
+                and (
+                    inter_stations_response is None
+                    or inter_stations_response.not_modified
+                )
             ):
                 if inter_routes_response.not_modified:
                     inter_routes_response = client.fetch_paginated_items_conditional(
@@ -1862,17 +1927,19 @@ def sync_static(
                     )
                     _persist_fetch_state(connection, inter_name, "shapes", inter_shapes_response, checked_at, inter_shapes_state)
 
-                if inter_stations_response.not_modified:
-                    inter_stations_response = client.fetch_paginated_items_conditional(
-                        "/v2/Bus/Station/InterCity",
-                        if_modified_since=None,
+                if inter_stations_response is not None and inter_stations_response.not_modified:
+                    inter_stations_response = _fetch_bus_stations(
+                        client, inter_name, if_modified_since=None
                     )
-                    _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
+                    if inter_stations_response is not None:
+                        _persist_fetch_state(connection, inter_name, "stations", inter_stations_response, checked_at, inter_stations_state)
 
                 inter_routes_raw = inter_routes_response.payload or []
                 inter_stop_of_route_items = inter_stops_response.payload or []
                 inter_shapes_raw = inter_shapes_response.payload or []
-                inter_stations_raw = inter_stations_response.payload or []
+                inter_stations_raw = (
+                    [] if inter_stations_response is None else (inter_stations_response.payload or [])
+                )
                 # The intercity build runs in TDX's own namespace, so the
                 # remembered canonicals have to have their INT prefix stripped
                 # before they can be matched.
@@ -1905,11 +1972,12 @@ def sync_static(
                     delete_main_routes_by_prefix(connection, INTERCITY_PREFIX)
                     for route in merged_inter_routes.values():
                         _replace_main_route(connection, route)
-                    _replace_bus_stations(
-                        connection,
-                        INTERCITY_PREFIX,
-                        inter_stations_raw,
-                    )
+                    if inter_stations_response is not None:
+                        _replace_bus_stations(
+                            connection,
+                            INTERCITY_PREFIX,
+                            inter_stations_raw,
+                        )
                     connection.execute(
                         "DELETE FROM route_operators WHERE routeid LIKE ?",
                         (f"{INTERCITY_PREFIX}%",),
@@ -1956,7 +2024,7 @@ def sync_static(
                     inter_routes_response.status_code,
                     inter_stops_response.status_code,
                     inter_shapes_response.status_code,
-                    inter_stations_response.status_code,
+                    "none" if inter_stations_response is None else inter_stations_response.status_code,
                 )
 
             if source_connection is not None:

@@ -15,9 +15,12 @@ import unittest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import requests
 
 from app.api.routes import router
+from app.config import INTERCITY_CITY_NAME
 from app.db import get_connection, init_db
+from app.tdx_client import TDXJSONResponse
 from app.rate_limit import reset_rate_limit_state
 from app.sync_static import (
     StaticPath,
@@ -26,6 +29,7 @@ from app.sync_static import (
     _build_static_routes,
     _choose_canonical,
     _copy_main_routes_by_prefix,
+    _fetch_bus_stations,
     _prefix_inter_routes,
     _replace_bus_stations,
     _replace_main_route,
@@ -608,6 +612,67 @@ class PersistenceTests(unittest.TestCase):
             count = target.execute("SELECT COUNT(*) AS n FROM route_uids").fetchone()["n"]
 
         self.assertEqual(count, 15)
+
+
+class FetchBusStationsTests(unittest.TestCase):
+    """TDX does not expose a Station feed for every authority.
+
+    ``/v2/Bus/Station/City/LienchiangCounty`` answers 400. Because sync_static
+    builds into a temp database and only swaps it onto bus.db at the very end,
+    letting that 400 escape discards every city synced before it — a whole run
+    lost to one authority that never had stations to begin with.
+    """
+
+    class _Client:
+        def __init__(self, error: Exception | None = None) -> None:
+            self.error = error
+            self.paths: list[str] = []
+
+        def fetch_paginated_items_conditional(self, path, *, if_modified_since=None):
+            self.paths.append(path)
+            if self.error is not None:
+                raise self.error
+            return TDXJSONResponse(payload=[{"StationUID": "X"}], status_code=200, last_modified=None)
+
+    @staticmethod
+    def _http_error(status: int) -> requests.HTTPError:
+        response = requests.Response()
+        response.status_code = status
+        return requests.HTTPError(f"{status} Client Error", response=response)
+
+    def test_missing_station_feed_degrades_to_none(self) -> None:
+        client = self._Client(self._http_error(400))
+
+        result = _fetch_bus_stations(client, "LienchiangCounty", if_modified_since=None)
+
+        self.assertIsNone(result)
+        self.assertEqual(client.paths, ["/v2/Bus/Station/City/LienchiangCounty"])
+
+    def test_transient_failures_still_raise(self) -> None:
+        # 429 and 5xx are retried inside the client; if they reach here the run
+        # should fail loudly rather than silently drop a city's stations.
+        for status in (429, 500, 503):
+            with self.subTest(status=status):
+                client = self._Client(self._http_error(status))
+                with self.assertRaises(requests.HTTPError):
+                    _fetch_bus_stations(client, "Taichung", if_modified_since=None)
+
+    def test_intercity_uses_its_own_endpoint(self) -> None:
+        client = self._Client()
+
+        result = _fetch_bus_stations(client, INTERCITY_CITY_NAME, if_modified_since=None)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(client.paths, ["/v2/Bus/Station/InterCity"])
+
+    def test_present_feed_is_returned_unchanged(self) -> None:
+        client = self._Client()
+
+        result = _fetch_bus_stations(client, "Taichung", if_modified_since="Mon, 01 Sep 2026 00:00:00 GMT")
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.payload, [{"StationUID": "X"}])
+        self.assertEqual(client.paths, ["/v2/Bus/Station/City/Taichung"])
 
 
 class SearchResultTests(unittest.TestCase):
