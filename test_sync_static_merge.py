@@ -614,6 +614,97 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(count, 15)
 
 
+class StationSidePositionTests(unittest.TestCase):
+    """Sides must carry the pole's own position, not the station's.
+
+    TDX's Station feed ships no usable per-stop position, so falling back to
+    StationPosition made every station_stops row identical to its parent — all
+    154k of them in production. That makes the column useless for telling sides
+    apart or collapsing co-located ones. StopOfRoute has the real positions and
+    is already in `stops` when _replace_bus_stations runs.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.db_path = Path(self.temp_dir.name) / "bus.db"
+        init_db(self.db_path)
+        with get_connection(self.db_path) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO routes (routeid, name, name_en) VALUES ('TPE1', '1', '1')"
+                )
+                connection.execute(
+                    "INSERT INTO paths (routeid, pathid, name, name_en)"
+                    " VALUES ('TPE1', 0, '往終點', 'Outbound')"
+                )
+                # Two poles on opposite kerbs, both well away from the station
+                # centroid so a fallback is unmistakable.
+                for seq, (stopid, lat, lon) in enumerate(
+                    (("STOP-A", 25.0391, 121.5588), ("STOP-B", 25.0414, 121.5613)), start=1
+                ):
+                    connection.execute(
+                        "INSERT INTO stops (routeid, pathid, seq, stopid, name, name_en, lat, lon)"
+                        " VALUES ('TPE1', 0, ?, ?, '市政府', 'City Hall', ?, ?)",
+                        (seq, stopid, lat, lon),
+                    )
+
+    def _station(self, *stop_ids: str) -> list[dict]:
+        return [
+            {
+                "StationUID": "TPE-STATION-1",
+                "StationName": {"Zh_tw": "市政府"},
+                "StationPosition": {"PositionLat": 25.04, "PositionLon": 121.56},
+                "Stops": [
+                    {"StopUID": f"UID-{s}", "StopID": s, "StopName": {"Zh_tw": "市政府"}}
+                    for s in stop_ids
+                ],
+            }
+        ]
+
+    def _sides(self) -> list[tuple]:
+        with get_connection(self.db_path) as connection:
+            return [
+                (row["stop_id"], row["lat"], row["lon"])
+                for row in connection.execute(
+                    "SELECT stop_id, lat, lon FROM station_stops ORDER BY side_order"
+                )
+            ]
+
+    def test_sides_take_their_own_stop_position(self) -> None:
+        with get_connection(self.db_path) as connection:
+            with connection:
+                _replace_bus_stations(connection, "TPE", self._station("STOP-A", "STOP-B"))
+
+        self.assertEqual(
+            self._sides(),
+            [("STOP-A", 25.0391, 121.5588), ("STOP-B", 25.0414, 121.5613)],
+        )
+
+    def test_sides_are_distinguishable_from_each_other(self) -> None:
+        # The property the whole fix exists for: two sides of one station must
+        # not collapse onto a single coordinate.
+        with get_connection(self.db_path) as connection:
+            with connection:
+                _replace_bus_stations(connection, "TPE", self._station("STOP-A", "STOP-B"))
+
+        positions = {(lat, lon) for _, lat, lon in self._sides()}
+        self.assertEqual(len(positions), 2)
+        self.assertNotIn((25.04, 121.56), positions)
+
+    def test_unknown_stop_id_falls_back_to_the_station_position(self) -> None:
+        # 0.1% of production sides have no matching stops row; they must still
+        # land somewhere sane rather than at (0, 0).
+        with get_connection(self.db_path) as connection:
+            with connection:
+                _replace_bus_stations(connection, "TPE", self._station("STOP-A", "STOP-GHOST"))
+
+        self.assertEqual(
+            self._sides(),
+            [("STOP-A", 25.0391, 121.5588), ("STOP-GHOST", 25.04, 121.56)],
+        )
+
+
 class FetchBusStationsTests(unittest.TestCase):
     """TDX does not expose a Station feed for every authority.
 

@@ -163,6 +163,22 @@ def _replace_bus_stations(
     connection.execute("DELETE FROM station_stops WHERE city_code = ?", (city_code,))
     connection.execute("DELETE FROM stations WHERE city_code = ?", (city_code,))
 
+    # TDX's Station feed carries no usable per-stop position, so sides used to
+    # fall back to the station's own coordinate — which made all 154k
+    # station_stops rows in production identical to their parent and useless for
+    # telling sides apart. StopOfRoute does carry real per-pole positions, and it
+    # has already been written into `stops` by the time this runs, so prefer it.
+    # A stop id resolves to exactly one position within an authority (verified
+    # against production: zero conflicting (prefix, stopid) groups), which makes
+    # the lookup unambiguous.
+    stop_positions = {
+        row["stopid"]: (row["lat"], row["lon"])
+        for row in connection.execute(
+            "SELECT stopid, lat, lon FROM stops WHERE routeid LIKE ? GROUP BY stopid",
+            (f"{city_code}%",),
+        )
+    }
+
     ordered_stations = sorted(
         (item for item in station_items if isinstance(item, dict)),
         key=lambda item: str(item.get("StationUID") or item.get("StationID") or ""),
@@ -216,7 +232,7 @@ def _replace_bus_stations(
             direction = side_name if side_name and side_name != station_name else None
             if direction is None and bearing not in (None, ""):
                 direction = str(bearing).strip() or None
-            side_lat, side_lon = _position_parts(
+            side_lat, side_lon = stop_positions.get(stop_id) or _position_parts(
                 raw_side.get("StopPosition"),
                 station.get("StationPosition"),
             )
