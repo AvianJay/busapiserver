@@ -635,6 +635,63 @@ def _normalize_station_city(city: str) -> str:
     return city_code
 
 
+# Sides closer together than this are the same physical pole. TDX mints a
+# separate StopUID per route family at one stop, so a single kerbside pole
+# routinely arrives as several "sides": 豐樂公園 carries 99/99延, 綠3, 73, 綠1
+# and 365 on five UIDs at one position. Grouping them restores what a passenger
+# actually sees standing there. Measured against production, 0 m already merges
+# 70% of multi-side stations and 10 m reaches 73%; beyond that the gain flattens
+# and the risk of swallowing the far kerb starts to rise.
+_STATION_SIDE_MERGE_METERS = 10.0
+
+
+def _rough_distance_meters(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
+    """Equirectangular metres — plenty accurate at the scale of one bus stop.
+
+    Matches the flat-earth constant the nearby-stops bounding box above uses.
+    """
+    lat_metres = (lat2 - lat1) * 111320
+    lon_metres = (lon2 - lon1) * 111320 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.hypot(lat_metres, lon_metres)
+
+
+def _station_side_label(index: int) -> str:
+    """Spreadsheet-style labels: A..Z, AA..AZ, and so on.
+
+    Merged sides are relabelled from scratch so the letters stay contiguous;
+    the stored side_label describes the pre-merge rows and would otherwise show
+    gaps like "A, F".
+    """
+    value = index + 1
+    label = ""
+    while value > 0:
+        value, remainder = divmod(value - 1, 26)
+        label = chr(ord("A") + remainder) + label
+    return label
+
+
+def _cluster_station_sides(side_rows: Collection) -> list[list]:
+    """Group side rows sitting on the same pole, preserving side_order."""
+    clusters: list[list] = []
+    for row in side_rows:
+        lat, lon = float(row["lat"]), float(row["lon"])
+        for cluster in clusters:
+            head = cluster[0]
+            if (
+                _rough_distance_meters(
+                    lat, lon, float(head["lat"]), float(head["lon"])
+                )
+                <= _STATION_SIDE_MERGE_METERS
+            ):
+                cluster.append(row)
+                break
+        else:
+            clusters.append([row])
+    return clusters
+
+
 def _station_passby_payload(
     request: Request,
     *,
@@ -747,16 +804,25 @@ def _station_passby_payload(
         "lon": float(station["lon"]),
         "sides": [
             {
-                "side_id": row["side_id"],
-                "label": row["side_label"],
-                "direction": row["direction"],
-                "stop_uid": row["stop_uid"],
-                "stopid": row["stop_id"],
-                "lat": float(row["lat"]),
-                "lon": float(row["lon"]),
-                "routes": routes_by_side.get(row["side_id"], []),
+                # Representative values: the merged side spans several StopUIDs,
+                # and every route below carries its own stopid, so nothing
+                # downstream resolves anything through these.
+                "side_id": cluster[0]["side_id"],
+                "label": _station_side_label(index),
+                "direction": next(
+                    (row["direction"] for row in cluster if row["direction"]), None
+                ),
+                "stop_uid": cluster[0]["stop_uid"],
+                "stopid": cluster[0]["stop_id"],
+                "lat": float(cluster[0]["lat"]),
+                "lon": float(cluster[0]["lon"]),
+                "routes": [
+                    route
+                    for row in cluster
+                    for route in routes_by_side.get(row["side_id"], [])
+                ],
             }
-            for row in side_rows
+            for index, cluster in enumerate(_cluster_station_sides(side_rows))
         ],
     }
 

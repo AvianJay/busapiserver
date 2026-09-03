@@ -46,8 +46,10 @@ class StationPassbyApiTests(unittest.TestCase):
         app.include_router(router)
         self.client = TestClient(app)
 
-        self._seed_route("TPE0001", "307", "STOP-A", 0, 2)
-        self._seed_route("TPE0002", "藍1", "STOP-B", 1, 5)
+        # Opposite kerbs, ~220 m apart, matching each side's StopPosition below.
+        # They must stay two sides: only genuinely co-located poles get merged.
+        self._seed_route("TPE0001", "307", "STOP-A", 0, 2, lat=25.039, lon=121.559)
+        self._seed_route("TPE0002", "藍1", "STOP-B", 1, 5, lat=25.041, lon=121.561)
         self._seed_route("KHH0001", "紅1", "STOP-A", 0, 1)
         with get_connection(self.db_path) as connection:
             with connection:
@@ -120,6 +122,8 @@ class StationPassbyApiTests(unittest.TestCase):
         stopid: str,
         pathid: int,
         seq: int,
+        lat: float = 25.04,
+        lon: float = 121.56,
     ) -> None:
         with get_connection(self.db_path) as connection:
             with connection:
@@ -137,7 +141,7 @@ class StationPassbyApiTests(unittest.TestCase):
                         (routeid, pathid, seq, stopid, name, name_en, lat, lon)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (routeid, pathid, seq, stopid, "市政府", "City Hall", 25.04, 121.56),
+                    (routeid, pathid, seq, stopid, "市政府", "City Hall", lat, lon),
                 )
 
     @staticmethod
@@ -214,6 +218,52 @@ class StationPassbyApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["station_id"], "TPE-STATION-1")
         self.assertEqual([side["label"] for side in body["sides"]], ["A", "B"])
+
+    def test_co_located_sides_merge_into_one(self) -> None:
+        # The 豐樂公園 shape: TDX mints a StopUID per route family, so one kerb
+        # arrives as several sides at an identical position. A passenger sees
+        # one pole, so the payload must too.
+        self._seed_route("TPE0003", "綠3", "STOP-A2", 0, 3, lat=25.039, lon=121.559)
+        self._seed_route("TPE0004", "73", "STOP-A3", 0, 4, lat=25.039, lon=121.559)
+        with get_connection(self.db_path) as connection:
+            with connection:
+                _replace_bus_stations(
+                    connection,
+                    "TPE",
+                    [
+                        {
+                            "StationUID": "TPE-STATION-2",
+                            "StationName": {"Zh_tw": "豐樂公園"},
+                            "StationPosition": {
+                                "PositionLat": 25.039,
+                                "PositionLon": 121.559,
+                            },
+                            "Stops": [
+                                {
+                                    "StopUID": f"TPE-UID-{s}",
+                                    "StopID": s,
+                                    "StopName": {"Zh_tw": "豐樂公園"},
+                                }
+                                for s in ("STOP-A", "STOP-A2", "STOP-A3")
+                            ],
+                        }
+                    ],
+                )
+
+        response = self.client.get("/api/v1/stations/TPE-STATION-2/passby?city=TPE")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([side["label"] for side in body["sides"]], ["A"])
+        self.assertEqual(
+            [route["route_name"] for route in body["sides"][0]["routes"]],
+            ["307", "綠3", "73"],
+        )
+        # Each route still resolves its own stop, which is what ETA lookup uses.
+        self.assertEqual(
+            [route["stopid"] for route in body["sides"][0]["routes"]],
+            ["STOP-A", "STOP-A2", "STOP-A3"],
+        )
 
     def test_resolve_is_city_scoped_without_name_or_distance_fallback(self) -> None:
         taipei = self.client.get(
