@@ -119,6 +119,37 @@ class RouteAliasIndexTests(unittest.TestCase):
         self.assertTrue(index.is_alias(ABSORBED))
         self.assertFalse(index.is_alias(CANONICAL))
 
+    def test_family_routeids_keeps_what_ambiguity_resolution_drops(self) -> None:
+        """An unresolvable RouteUID can still be described by its members."""
+        with get_connection(self.db_path) as connection:
+            with connection:
+                connection.executemany(
+                    "INSERT INTO routes (routeid, name, name_en) VALUES (?, ?, ?)",
+                    [
+                        ("TPE10231", "民權幹線", None),
+                        ("TPE162593", "民權幹線去程半", None),
+                        ("TPE101320", "234", None),
+                    ],
+                )
+                connection.executemany(
+                    "INSERT INTO route_uids (route_uid, direction, routeid) VALUES (?, ?, ?)",
+                    [
+                        ("TPE10231", 0, "TPE10231"),
+                        ("TPE10231", 0, "TPE162593"),
+                        ("TPE10132", 0, "TPE101320"),
+                    ],
+                )
+        reset_route_alias_cache()
+
+        index = get_route_alias_index(self.settings)
+
+        self.assertIsNone(index.routeid_for_route_uid("TPE10231", 0))
+        self.assertEqual(
+            index.family_routeids("TPE10231"), ("TPE10231", "TPE162593")
+        )
+        self.assertEqual(index.family_routeids("TPE10132"), ("TPE101320",))
+        self.assertEqual(index.family_routeids("TPE99999"), ())
+
     def test_unknown_routeid_passes_through(self) -> None:
         _seed_merged_route(self.db_path)
         reset_route_alias_cache()

@@ -16,7 +16,12 @@ import unittest
 from app.config import Settings
 from app.db import get_connection, init_db
 from app.route_aliases import get_route_alias_index, reset_route_alias_cache
-from app.sync_realtime import RealtimeService, RouteBusesService, _tdx_item_to_local
+from app.sync_realtime import (
+    RealtimeService,
+    RouteBusesService,
+    _tdx_item_to_local,
+    _tdx_item_to_local_strict,
+)
 from app.tdx_client import TDXClient, TDXJSONResponse
 
 
@@ -281,6 +286,71 @@ class TdxItemToLocalTests(_IndexTestCase):
     def test_item_without_any_id_is_none(self) -> None:
         self.assertIsNone(
             _tdx_item_to_local("Taipei", {"Direction": 0}, settings=self.settings)
+        )
+
+
+class TdxStrictResolutionTests(_IndexTestCase):
+    """The city-map resolver must never guess, unlike its lenient sibling."""
+
+    def test_subroute_uid_resolves_and_keeps_the_route_uid(self) -> None:
+        _seed_taipei_234(self.db_path)
+        reset_route_alias_cache()
+
+        item = {"RouteUID": "TPE10132", "SubRouteUID": "TPE101320", "Direction": 0}
+
+        self.assertEqual(
+            _tdx_item_to_local_strict("Taipei", item, settings=self.settings),
+            ("TPE101320", "TPE10132", 0),
+        )
+
+    def test_unique_route_uid_resolves(self) -> None:
+        _seed_taipei_234(self.db_path)
+        _seed_route_uid_rows(self.db_path, [("TPE10132", 0, "TPE101320")])
+        reset_route_alias_cache()
+
+        item = {"RouteUID": "TPE10132", "SubRouteUID": None, "Direction": 0}
+
+        self.assertEqual(
+            _tdx_item_to_local_strict("Taipei", item, settings=self.settings),
+            ("TPE101320", "TPE10132", 0),
+        )
+
+    def test_ambiguous_route_uid_stays_unresolved(self) -> None:
+        _seed_route(self.db_path, "TPE10231", "民權幹線", {0: [(1, "40001", "民權西路")]})
+        _seed_route(self.db_path, "TPE162593", "民權幹線去程半", {0: [(1, "40001", "民權西路")]})
+        _seed_route_uid_rows(
+            self.db_path,
+            [("TPE10231", 0, "TPE10231"), ("TPE10231", 0, "TPE162593")],
+        )
+        reset_route_alias_cache()
+
+        item = {"RouteUID": "TPE10231", "SubRouteUID": None, "Direction": 0}
+
+        self.assertEqual(
+            _tdx_item_to_local_strict("Taipei", item, settings=self.settings),
+            (None, "TPE10231", 0),
+        )
+
+    def test_unmapped_route_uid_is_never_promoted_to_a_routeid(self) -> None:
+        reset_route_alias_cache()
+
+        item = {"RouteUID": "TPE99999", "SubRouteUID": None, "Direction": 0}
+
+        routeid, route_uid, direction = _tdx_item_to_local_strict(
+            "Taipei", item, settings=self.settings
+        )
+
+        self.assertIsNone(routeid)
+        self.assertEqual((route_uid, direction), ("TPE99999", 0))
+        # The lenient resolver still does promote it; its callers filter after.
+        self.assertEqual(
+            _tdx_item_to_local("Taipei", item, settings=self.settings), "TPE99999"
+        )
+
+    def test_item_without_any_id_has_no_identity(self) -> None:
+        self.assertEqual(
+            _tdx_item_to_local_strict("Taipei", {"Direction": 1}, settings=self.settings),
+            (None, None, 1),
         )
 
 

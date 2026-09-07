@@ -181,6 +181,19 @@ class Settings:
     # instead — a SubRouteUID filter matches nothing there. Set the env var to
     # an empty value to fall back to the legacy SubRouteUID filter everywhere.
     tdx_routeuid_filter_cities: tuple[str, ...] = ("Taipei", "NewTaipei")
+    # Whole-city live bus feed (全公車地圖). One unfiltered TDX pull per city is
+    # cached for this long and shared by every client, so upstream load is
+    # bounded by the TTL rather than by how many people have the map open.
+    city_buses_cache_ttl: int = 15
+    # How long a snapshot may still be served after upstream starts failing.
+    # Past this the endpoint 502s so clients back off instead of showing buses
+    # that stopped moving minutes ago.
+    city_buses_stale_max_seconds: int = 120
+    # $top for the unfiltered pull. Measured 2026-09-06: Taipei 777 / NewTaipei
+    # 633 / Taichung 328 items in one page, InterCity 1295 over two pages, so
+    # 1000 pages everything without a silent cap.
+    city_buses_page_size: int = 1000
+    city_buses_rate_limit_requests: int = 30
 
     def __post_init__(self) -> None:
         if self.app_db_path is None:
@@ -290,6 +303,14 @@ class Settings:
                 ("Taipei", "NewTaipei")
                 if os.getenv("TDX_ROUTEUID_FILTER_CITIES") is None
                 else _split_csv(os.getenv("TDX_ROUTEUID_FILTER_CITIES"), ())
+            ),
+            city_buses_cache_ttl=int(os.getenv("CITY_BUSES_CACHE_TTL", "15")),
+            city_buses_stale_max_seconds=int(
+                os.getenv("CITY_BUSES_STALE_MAX_SECONDS", "120")
+            ),
+            city_buses_page_size=int(os.getenv("CITY_BUSES_PAGE_SIZE", "1000")),
+            city_buses_rate_limit_requests=int(
+                os.getenv("CITY_BUSES_RATE_LIMIT_REQUESTS", "30")
             ),
         )
 

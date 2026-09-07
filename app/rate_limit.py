@@ -119,14 +119,21 @@ def check_rate_limit(
         hits.append(current)
 
 
-def enforce_rate_limit(request: Request) -> None:
+def request_rate_limit_key(request: Request) -> str:
+    """The per-caller key rate limits are counted against.
+
+    Authenticated callers get their own budget so a shared NAT address does not
+    pool them together. Endpoints that need a bucket of their own (a polling
+    map, say) reuse this key with a different bucket name.
+    """
     principal = _authenticate_request(request)
     if principal is None:
-        bucket = f"ip:{_get_client_ip(request)}"
-    else:
-        bucket = f"user:{principal.account_id}"
+        return f"ip:{_get_client_ip(request)}"
+    return f"user:{principal.account_id}"
 
-    check_rate_limit(bucket, "global")
+
+def enforce_rate_limit(request: Request) -> None:
+    check_rate_limit(request_rate_limit_key(request), "global")
 
 
 def get_request_principal(request: Request) -> AuthPrincipal | None:

@@ -15,6 +15,9 @@ SKIP_ANALYTICS_ENDPOINTS = frozenset(
         "/api/v1/analytics",
         "/admin/analytics",
         "/api/v1/admin/analytics",
+        # The map polls this every ~15 s per open screen; recording each poll
+        # would bury every other endpoint in the analytics table.
+        "/api/v1/cities/{city}/buses",
     }
 )
 SKIP_ANALYTICS_PREFIXES = (

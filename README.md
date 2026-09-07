@@ -308,6 +308,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | GET | `/api/v1/routes/{routeid}/realtime` | 單一路線即時到站 |
 | GET | `/api/v1/batchroutes/{routeids}/realtime` | 批次查詢多條路線即時到站（同城市共用一次 TDX 請求） |
 | GET | `/api/v1/routes/{routeid}/realtime/buses` | 路線上所有公車目前位置 |
+| GET | `/api/v1/cities/{city}/buses` | 整個城市的公車即時位置（全公車地圖）|
 | GET | `/api/v1/routes/{routeid}/stops` | 路線站序清單 |
 | GET | `/api/v1/routes/{routeid}/paths/{pathid}/points` | 路線線型座標點 |
 | GET | `/api/v1/routes/{routeid}/schedule` | 路線班表 |
@@ -601,6 +602,25 @@ base64(snowflake).base64(timestamp).random_secret
 ```
 
 超過限制會回傳 `429`，並附上 `Retry-After` 標頭。
+
+唯一的例外是全公車地圖 `/api/v1/cities/{city}/buses`：地圖每 15 秒左右輪詢一次，
+若計入全域額度會吃掉其他功能的配額，因此它有自己的 `city-buses` 額度
+（預設每 60 秒 30 次，`CITY_BUSES_RATE_LIMIT_REQUESTS` 可調），不佔用上面的 60 次。
+
+### 全公車地圖設定
+
+一個城市的即時車位只會向 TDX 抓一次並快取，所有客戶端共用同一份快照，
+上游負載由 TTL 決定而不是由開著地圖的人數決定。
+
+| 環境變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `CITY_BUSES_CACHE_TTL` | `15` | 每個城市的快照保鮮秒數（多 worker 部署請乘上 worker 數）|
+| `CITY_BUSES_STALE_MAX_SECONDS` | `120` | 上游失敗後還願意續供舊快照的上限，超過就回 502 讓客戶端退避 |
+| `CITY_BUSES_PAGE_SIZE` | `1000` | 未過濾查詢的 `$top`（實測台北 777、新北 633、台中 328 筆一頁可拿完）|
+| `CITY_BUSES_RATE_LIMIT_REQUESTS` | `30` | 地圖專屬額度，每 60 秒 |
+
+日誌中值得警戒的兩行：`city buses page cap detected`（TDX 悄悄截斷分頁）與
+`city buses item count dropped sharply`（車輛數異常腰斬）。
 
 ### 角色與權限
 

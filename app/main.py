@@ -25,6 +25,8 @@ from app.api.routes import router
 from app.api.metro import router as metro_router
 from app.api.rail import router as rail_router
 from app.api.bike import router as bike_router
+from app.api.city_buses import router as city_buses_router
+from app.city_buses import CityBusesService
 from app.config import get_settings
 from app.db import (
     export_download_db_if_stale,
@@ -210,6 +212,7 @@ async def lifespan(app: FastAPI):
     tdx_client = TDXClient(settings, token_manager)
     ntpc_opendata_client = NtpcOpenDataClient(request_timeout=settings.tdx_request_timeout)
     route_buses_service = RouteBusesService(settings, tdx_client)
+    city_buses_service = CityBusesService(settings, tdx_client)
     realtime_service = RealtimeService(
         settings,
         tdx_client,
@@ -233,6 +236,7 @@ async def lifespan(app: FastAPI):
     app.state.ntpc_opendata_client = ntpc_opendata_client
     app.state.realtime_service = realtime_service
     app.state.route_buses_service = route_buses_service
+    app.state.city_buses_service = city_buses_service
     app.state.scheduler_stop_event = scheduler_stop_event
     app.state.scheduler_thread = scheduler_thread
     app.state.tunnel = None
@@ -355,6 +359,7 @@ app.include_router(feedback_router)
 app.include_router(legal_router)
 app.include_router(push_router)
 app.include_router(router)
+app.include_router(city_buses_router)
 app.include_router(metro_router)
 app.include_router(rail_router)
 app.include_router(bike_router)

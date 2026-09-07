@@ -101,6 +101,12 @@ class AnalyticsTests(unittest.TestCase):
         self.assertFalse(should_record_analytics("/admin/analytics"))
         self.assertFalse(should_record_analytics("/api/v1/admin/analytics"))
 
+    def test_should_skip_the_city_bus_map_poll(self) -> None:
+        # The map polls this every ~15 s per open screen; recording every poll
+        # would drown out every other endpoint in the table.
+        self.assertFalse(should_record_analytics("/api/v1/cities/{city}/buses"))
+        self.assertTrue(should_record_analytics("/api/v1/cities/{city}/routes"))
+
 
 if __name__ == "__main__":
     unittest.main()

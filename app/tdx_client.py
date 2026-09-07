@@ -482,3 +482,38 @@ class TDXClient:
 
     def fetch_alerts(self, city: str) -> list[dict[str, Any]]:
         return self.fetch_paginated_items(self._bus_resource_path(city, "Alert"))
+
+    def fetch_city_realtime_buses(
+        self,
+        city: str,
+        *,
+        if_modified_since: str | None = None,
+        page_size: int = 1000,
+    ) -> TDXJSONResponse:
+        """Every live bus in one city, unfiltered.
+
+        The $filter path costs one request per 25 route ids (17 for Taipei);
+        the unfiltered collection is a single page for every city measured so
+        far, so a whole-city map polls it instead. Callers MUST branch on
+        ``not_modified`` before reading ``payload``: a 304 comes back with an
+        empty payload, not an empty city.
+        """
+        return self.fetch_paginated_items_conditional(
+            self._bus_resource_path(city, "RealTimeByFrequency"),
+            page_size=page_size,
+            if_modified_since=if_modified_since,
+        )
+
+    def probe_city_realtime_buses(self, city: str, *, skip: int) -> int:
+        """How many items exist just past ``skip``, capped at one.
+
+        Paging stops as soon as a page comes back shorter than requested, so a
+        server-side $top cap is indistinguishable from "that was the whole
+        city". Asking for a single item past the end tells them apart. This is
+        one raw request on purpose: paging it would walk the entire collection.
+        """
+        payload = self._request_json(
+            self._bus_resource_path(city, "RealTimeByFrequency"),
+            params={"$top": 1, "$skip": skip, "$format": "JSON"},
+        )
+        return len(self._normalize_items(payload))

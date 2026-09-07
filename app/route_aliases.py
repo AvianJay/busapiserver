@@ -56,6 +56,7 @@ class RouteAliasIndex:
         "_expansion",
         "_routeid_by_uid",
         "_routeid_by_uid_dir",
+        "_routeids_by_uid_all",
         "_uid_by_routeid",
     )
 
@@ -66,12 +67,14 @@ class RouteAliasIndex:
         routeid_by_uid: dict[str, str] | None = None,
         routeid_by_uid_dir: dict[tuple[str, int], str] | None = None,
         uid_by_routeid: dict[str, str] | None = None,
+        routeids_by_uid_all: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self._canonical = canonical
         self._expansion = expansion
         self._routeid_by_uid = routeid_by_uid or {}
         self._routeid_by_uid_dir = routeid_by_uid_dir or {}
         self._uid_by_routeid = uid_by_routeid or {}
+        self._routeids_by_uid_all = routeids_by_uid_all or {}
 
     def canonical(self, routeid: str) -> str:
         """Collapse a SubRouteUID onto the routeid that absorbed it."""
@@ -112,6 +115,17 @@ class RouteAliasIndex:
         """The TDX RouteUID to query ``routeid`` by, or None when unknown."""
         return self._uid_by_routeid.get(routeid)
 
+    def family_routeids(self, route_uid: str) -> tuple[str, ...]:
+        """Every routeid sharing ``route_uid``, ambiguous families included.
+
+        ``routeid_for_route_uid`` fails closed on ambiguity because a feed that
+        only carries RouteUID cannot say which 區間/lettered variant an item
+        belongs to. Callers that must still *describe* such an item — a
+        city-wide map labelling a bus it cannot pin to one variant — need the
+        whole family instead of nothing, which is what this returns.
+        """
+        return self._routeids_by_uid_all.get(route_uid, ())
+
     def __len__(self) -> int:
         return len(self._canonical)
 
@@ -121,8 +135,18 @@ _EMPTY_INDEX = RouteAliasIndex({}, {})
 
 def _build_route_uid_maps(
     rows: list[tuple[str, int, str]],
-) -> tuple[dict[str, str], dict[tuple[str, int], str], dict[str, str]]:
-    """Collapse route_uids rows into lookup maps, dropping ambiguous keys."""
+) -> tuple[
+    dict[str, str],
+    dict[tuple[str, int], str],
+    dict[str, str],
+    dict[str, tuple[str, ...]],
+]:
+    """Collapse route_uids rows into lookup maps, dropping ambiguous keys.
+
+    The fourth map keeps every routeid per RouteUID *before* the ambiguity
+    collapse, so callers can describe an unresolvable family (see
+    ``RouteAliasIndex.family_routeids``).
+    """
     routeids_by_uid: dict[str, set[str]] = {}
     routeids_by_uid_dir: dict[tuple[str, int], set[str]] = {}
     uids_by_routeid: dict[str, set[str]] = {}
@@ -147,13 +171,17 @@ def _build_route_uid_maps(
         if len(uids) == 1
     }
 
+    routeids_by_uid_all = {
+        uid: tuple(sorted(routeids)) for uid, routeids in routeids_by_uid.items()
+    }
+
     ambiguous = len(routeids_by_uid) - len(routeid_by_uid)
     if ambiguous:
         LOGGER.info(
             "route uid index: %s RouteUIDs shared by multiple routes left unmapped",
             ambiguous,
         )
-    return routeid_by_uid, routeid_by_uid_dir, uid_by_routeid
+    return routeid_by_uid, routeid_by_uid_dir, uid_by_routeid, routeids_by_uid_all
 
 
 def _derive_legacy_route_uid_maps(
@@ -238,9 +266,12 @@ def load_route_alias_index(db_path: str | Path) -> RouteAliasIndex:
             canonical = load_route_subroute_map(connection)
             expansion = load_route_subroute_expansion(connection)
             uid_rows = load_route_uid_rows(connection)
-            routeid_by_uid, routeid_by_uid_dir, uid_by_routeid = (
-                _build_route_uid_maps(uid_rows)
-            )
+            (
+                routeid_by_uid,
+                routeid_by_uid_dir,
+                uid_by_routeid,
+                routeids_by_uid_all,
+            ) = _build_route_uid_maps(uid_rows)
             derived_by_uid, derived_uid_by_routeid = _derive_legacy_route_uid_maps(
                 connection, uid_rows
             )
@@ -251,6 +282,7 @@ def load_route_alias_index(db_path: str | Path) -> RouteAliasIndex:
     # Persisted rows win over naming-convention derivation.
     for uid, routeid in derived_by_uid.items():
         routeid_by_uid.setdefault(uid, routeid)
+        routeids_by_uid_all.setdefault(uid, (routeid,))
     for routeid, uid in derived_uid_by_routeid.items():
         uid_by_routeid.setdefault(routeid, uid)
 
@@ -262,6 +294,7 @@ def load_route_alias_index(db_path: str | Path) -> RouteAliasIndex:
         routeid_by_uid,
         routeid_by_uid_dir,
         uid_by_routeid,
+        routeids_by_uid_all,
     )
 
 

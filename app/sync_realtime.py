@@ -145,6 +145,47 @@ def _tdx_item_to_local(
     return _tdx_routeid_to_local(city, route_uid, settings=settings)
 
 
+def _tdx_item_to_local_strict(
+    city: str,
+    item: dict[str, Any],
+    *,
+    settings: Settings | None = None,
+) -> tuple[str | None, str | None, int | None]:
+    """Resolve a realtime item without ever guessing a routeid.
+
+    Returns ``(routeid, route_uid, direction)``. Unlike ``_tdx_item_to_local``
+    this never falls back to treating a RouteUID as a routeid: that fallback is
+    only safe because every existing caller then drops ids missing from its
+    tracked/static route set, and a city-wide feed has no such set. An
+    unresolvable item keeps its RouteUID so the caller can still show the bus
+    and describe it through ``RouteAliasIndex.family_routeids``.
+
+    ``route_uid`` is None only when the item carries no usable identity at all,
+    which means the caller should drop it.
+    """
+    try:
+        direction: int | None = int(item.get("Direction"))
+    except (TypeError, ValueError):
+        direction = None
+
+    index = get_route_alias_index(settings) if settings is not None else None
+
+    subroute_uid = item.get("SubRouteUID")
+    if subroute_uid is not None and str(subroute_uid).strip():
+        routeid = _tdx_routeid_to_local(city, subroute_uid, settings=settings)
+        route_uid = str(item.get("RouteUID") or "").strip()
+        if not route_uid and routeid is not None and index is not None:
+            route_uid = index.route_uid_for(routeid) or ""
+        return routeid, route_uid or routeid, direction
+
+    route_uid = str(item.get("RouteUID") or "").strip()
+    if not route_uid:
+        return None, None, direction
+    if index is None:
+        return None, route_uid, direction
+    return index.routeid_for_route_uid(route_uid, direction), route_uid, direction
+
+
 def _to_unix_seconds(value: str | None) -> int | None:
     if not value:
         return None
